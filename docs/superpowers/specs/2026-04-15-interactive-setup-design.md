@@ -51,7 +51,7 @@ cargo run -p rcc
 즉 사용자는:
 
 1. `setup` 실행
-2. 터미널의 링크/질문을 따라 Slack app 생성
+2. 터미널의 링크/질문을 따라 Slack bot/app 생성
 3. 토큰 입력
 4. project mapping 입력
 5. `doctor` 성공 확인
@@ -68,6 +68,7 @@ cargo run -p rcc
 - prerequisites의 핵심 항목 점검
 - Slack manifest 경로 안내
 - Slack app 생성 링크 안내
+- Slack bot onboarding을 설치 흐름 안에 포함
 - 토큰 4종 입력 받기
 - `projectRoot`, `projectLabel`, `channelId` 입력 받기
 - `.env.local` 작성
@@ -179,7 +180,7 @@ cargo run -p rcc
 
 ## Slack app 생성 단계
 
-이 단계의 핵심은 사용자가 Slack 설정 페이지에서 헤매지 않게 만드는 것이다.
+이 단계의 핵심은 사용자가 Slack 설정 페이지에서 헤매지 않게 만들고, Slack bot onboarding 자체를 installer 흐름 안에 포함시키는 것이다.
 
 ### wizard가 해야 할 일
 
