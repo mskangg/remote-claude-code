@@ -1,6 +1,7 @@
 use std::{env, path::PathBuf, sync::Arc};
 
-use rcc::{build_app, find_env_file, resolve_workspace_root, run_doctor, AppConfig};
+use rcc::{build_app, find_env_file, parse_cli_command, resolve_workspace_root, run_doctor, AppConfig, CliCommand};
+use rcc::setup::run_setup;
 use transport_slack::{serve_socket_mode, SlackSessionOrchestrator};
 
 #[tokio::main]
@@ -13,19 +14,29 @@ async fn main() {
     let args: Vec<String> = env::args().collect();
     let workspace_root = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    if args.get(1).is_some_and(|arg| arg == "doctor") {
-        let checks = run_doctor(&config, &workspace_root);
-        let all_ok = checks.iter().all(|check| check.ok);
+    match parse_cli_command(&args) {
+        CliCommand::Doctor => {
+            let checks = run_doctor(&config, &workspace_root);
+            let all_ok = checks.iter().all(|check| check.ok);
 
-        for check in checks {
-            let status = if check.ok { "OK" } else { "FAIL" };
-            println!("[{status}] {} - {}", check.name, check.detail);
-        }
+            for check in checks {
+                let status = if check.ok { "OK" } else { "FAIL" };
+                println!("[{status}] {} - {}", check.name, check.detail);
+            }
 
-        if !all_ok {
-            std::process::exit(1);
+            if !all_ok {
+                std::process::exit(1);
+            }
+            return;
         }
-        return;
+        CliCommand::Setup => {
+            if let Err(error) = run_setup(&config).await {
+                eprintln!("failed to complete setup: {error}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        CliCommand::Run => {}
     }
 
     match build_app(config) {

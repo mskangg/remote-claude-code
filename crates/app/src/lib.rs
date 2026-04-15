@@ -320,6 +320,23 @@ pub fn run_doctor(config: &AppConfig, workspace_root: &Path) -> Vec<DoctorCheck>
     ]
 }
 
+pub mod setup;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CliCommand {
+    Run,
+    Doctor,
+    Setup,
+}
+
+pub fn parse_cli_command(args: &[String]) -> CliCommand {
+    match args.get(1).map(|value| value.as_str()) {
+        Some("doctor") => CliCommand::Doctor,
+        Some("setup") => CliCommand::Setup,
+        _ => CliCommand::Run,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core_model::{SessionState, TurnId};
@@ -328,6 +345,142 @@ mod tests {
     use transport_slack::{SlackSessionStart, SlackSocketModeConfig};
 
     use super::*;
+
+    #[test]
+    fn parse_cli_command_detects_setup() {
+        let args = vec!["rcc".to_string(), "setup".to_string()];
+        assert_eq!(parse_cli_command(&args), CliCommand::Setup);
+    }
+
+    #[test]
+    fn setup_prerequisites_report_missing_env_as_soft_gap() {
+        let prerequisites = setup::SetupPrerequisites {
+            tmux_ok: true,
+            claude_ok: true,
+            manifest_ok: true,
+            workspace_writable: true,
+            env_exists: false,
+            mapping_exists: false,
+        };
+
+        assert!(!prerequisites.has_hard_failure());
+        assert_eq!(prerequisites.soft_gaps(), vec!["env_file", "channel_project_mapping"]);
+    }
+
+    #[test]
+    fn setup_prerequisites_report_missing_tmux_as_hard_failure() {
+        let prerequisites = setup::SetupPrerequisites {
+            tmux_ok: false,
+            claude_ok: true,
+            manifest_ok: true,
+            workspace_writable: true,
+            env_exists: false,
+            mapping_exists: false,
+        };
+
+        assert!(prerequisites.has_hard_failure());
+    }
+
+    #[test]
+    fn write_env_file_updates_only_requested_keys() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let env_path = temp_dir.path().join(".env.local");
+        fs::write(&env_path, "EXTRA=value\nSLACK_BOT_TOKEN=old\n").expect("seed env file");
+
+        let updates = vec![
+            ("SLACK_BOT_TOKEN", "new-bot-token"),
+            ("SLACK_APP_TOKEN", "new-app-token"),
+        ];
+
+        setup::write_env_updates(&env_path, &updates).expect("write env updates");
+        let written = fs::read_to_string(&env_path).expect("read env file");
+
+        assert!(written.contains("EXTRA=value"));
+        assert!(written.contains("SLACK_BOT_TOKEN=new-bot-token"));
+        assert!(written.contains("SLACK_APP_TOKEN=new-app-token"));
+    }
+
+    #[test]
+    fn upsert_channel_project_record_replaces_existing_channel() {
+        let mut records = vec![ChannelProjectRecord {
+            channel_id: "C123".to_string(),
+            project_root: "/tmp/old".to_string(),
+            project_label: "old".to_string(),
+        }];
+
+        setup::upsert_channel_project_record(
+            &mut records,
+            ChannelProjectRecord {
+                channel_id: "C123".to_string(),
+                project_root: "/tmp/new".to_string(),
+                project_label: "new".to_string(),
+            },
+        );
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].project_root, "/tmp/new");
+    }
+
+    #[test]
+    fn format_doctor_failures_includes_next_actions() {
+        let checks = vec![
+            DoctorCheck {
+                name: "tmux",
+                ok: false,
+                detail: "tmux is available on PATH".to_string(),
+            },
+            DoctorCheck {
+                name: "channel_project_mapping",
+                ok: false,
+                detail: "channel project mapping: /tmp/data/channel-projects.json".to_string(),
+            },
+        ];
+
+        let output = setup::format_setup_doctor_failures(&checks);
+        assert!(output.contains("tmux를 설치"));
+        assert!(output.contains("channel-projects.json"));
+    }
+
+    #[tokio::test]
+    async fn setup_flow_guides_slack_bot_onboarding_and_writes_local_files() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let workspace_root = temp_dir.path();
+        fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
+        fs::write(workspace_root.join("slack/app-manifest.json"), "{}")
+            .expect("write manifest");
+        fs::create_dir_all(workspace_root.join(".claude")).expect("create claude dir");
+
+        let config = AppConfig {
+            state_db_path: workspace_root.join(".local/state.db"),
+            channel_project_store_path: workspace_root.join("data/channel-projects.json"),
+            runtime_working_directory: workspace_root.display().to_string(),
+            runtime_launch_command: "claude --settings .claude/claude-stop-hooks.json --dangerously-skip-permissions".to_string(),
+            runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
+            runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+        };
+
+        let mut prompter = setup::FakePrompter::new(vec![
+            setup::FakeAnswer::Confirm,
+            setup::FakeAnswer::Secret("xoxb-bot".into()),
+            setup::FakeAnswer::Secret("signing-secret".into()),
+            setup::FakeAnswer::Secret("xapp-app".into()),
+            setup::FakeAnswer::Prompt("U123".into()),
+            setup::FakeAnswer::Prompt("C123".into()),
+            setup::FakeAnswer::Prompt(workspace_root.display().to_string()),
+            setup::FakeAnswer::Prompt("demo-project".into()),
+        ]);
+
+        let result = setup::run_setup_with_prompter(&config, workspace_root, &mut prompter).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert!(prompter.output().contains("Create app from manifest"));
+        assert!(prompter.output().contains("cargo run -p rcc"));
+        assert!(fs::read_to_string(workspace_root.join(".env.local"))
+            .unwrap()
+            .contains("SLACK_BOT_TOKEN=xoxb-bot"));
+        assert!(fs::read_to_string(workspace_root.join("data/channel-projects.json"))
+            .unwrap()
+            .contains("demo-project"));
+    }
 
     #[test]
     fn config_defaults_to_workspace_local_paths() {

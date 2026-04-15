@@ -37,21 +37,15 @@
 
 ## Quickstart
 
-1. `data/channel-projects.example.json`을 복사해 `data/channel-projects.json`을 만듭니다.
-2. 워크스페이스 루트에 `.env.local`을 준비합니다.
-3. 먼저 설치와 환경을 확인합니다.
-
 ```bash
+cargo run -p rcc -- setup
 cargo run -p rcc -- doctor
-```
-
-4. 앱을 실행합니다.
-
-```bash
 cargo run -p rcc
 ```
 
-5. Slack에서 `/cc`를 실행합니다.
+`setup`은 Slack bot onboarding 링크 안내, manifest 경로 안내, 토큰 입력, channel mapping 작성, 그리고 마지막 `doctor` 검증까지 순서대로 진행합니다.
+
+앱 실행 뒤 Slack에서 `/cc`를 실행하면 됩니다.
 
 더 자세한 설정은 [`docs/slack-setup.md`](docs/slack-setup.md)에서 볼 수 있습니다.
 

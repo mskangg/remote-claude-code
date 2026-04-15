@@ -8,21 +8,25 @@ Remote Claude Code의 첫 공개는 Slack-first입니다. 지금은 사용자가
 
 ## 가장 짧은 흐름
 
-1. `slack/app-manifest.json`으로 Slack 앱을 생성합니다.
-2. 워크스페이스 루트의 `.env.local`에 필요한 값을 넣습니다.
-3. 아래 명령으로 환경을 먼저 검증합니다.
+```bash
+cargo run -p rcc -- setup
+```
+
+`setup`이 아래를 순서대로 진행합니다.
+
+- Slack app 생성 링크 안내 (`Create app from manifest`)
+- `slack/app-manifest.json` 경로 안내
+- 토큰 4종 입력
+- channel mapping 입력
+- `.env.local` 작성
+- `doctor` 실행
+
+그 다음 실행 흐름은 아래처럼 고정됩니다.
 
 ```bash
 cargo run -p rcc -- doctor
-```
-
-4. 검증이 끝나면 앱을 실행합니다.
-
-```bash
 cargo run -p rcc
 ```
-
-5. Slack에서 `/cc`를 실행합니다.
 
 ## Claude Code에게 맡길 때
 
