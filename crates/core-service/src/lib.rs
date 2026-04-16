@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::{Arc, OnceLock}};
 use async_trait::async_trait;
 use core_model::{SessionId, SessionMsg, SessionState, TurnId};
 use tokio::sync::{mpsc, oneshot, Mutex};
+use tracing::warn;
 
 #[async_trait]
 pub trait SessionRepository: Send + Sync {
@@ -55,6 +56,11 @@ pub trait SessionRuntimeConfigurator: Send + Sync {
 #[async_trait]
 pub trait SessionRuntimeLiveness: Send + Sync {
     async fn is_session_alive(&self, session_id: SessionId) -> anyhow::Result<bool>;
+}
+
+#[async_trait]
+pub trait SessionRuntimeCleanup: Send + Sync {
+    async fn clear_runtime_bookkeeping(&self, session_id: SessionId) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -135,6 +141,16 @@ where
 }
 
 #[async_trait]
+impl<T> SessionRuntimeCleanup for Arc<T>
+where
+    T: SessionRuntimeCleanup + Send + Sync,
+{
+    async fn clear_runtime_bookkeeping(&self, session_id: SessionId) -> anyhow::Result<()> {
+        (**self).clear_runtime_bookkeeping(session_id).await
+    }
+}
+
+#[async_trait]
 impl<T> SessionStateObserver for Arc<T>
 where
     T: SessionStateObserver + Send + Sync,
@@ -158,7 +174,7 @@ pub struct SessionActor<R, E> {
 impl<R, E> SessionActor<R, E>
 where
     R: SessionRepository,
-    E: RuntimeEngine,
+    E: RuntimeEngine + SessionRuntimeCleanup,
 {
     pub fn new(
         repository: R,
@@ -178,17 +194,27 @@ where
             .load_state(session_id)
             .await?
             .unwrap_or(SessionState::Starting);
-        let next_state = reduce(current_state.clone(), &message);
-        self.repository.save_state(session_id, &next_state).await?;
-        if should_forward_to_runtime(&current_state, &message, &next_state) {
-            self.runtime.handle(session_id, &message, &next_state).await?;
+        let candidate_state = reduce(current_state.clone(), &message);
+        let final_state = if should_forward_to_runtime(&current_state, &message, &candidate_state) {
+            match self.runtime.handle(session_id, &message, &candidate_state).await {
+                Ok(()) => candidate_state,
+                Err(error) => reconcile_runtime_failure(&current_state, &message, error),
+            }
+        } else {
+            candidate_state
+        };
+        persist_final_state(&self.repository, session_id, &final_state).await?;
+        if is_terminal_state(&final_state) {
+            if let Err(error) = self.runtime.clear_runtime_bookkeeping(session_id).await {
+                warn!(session_id = %session_id.0, error = %error, "failed to clear runtime bookkeeping");
+            }
         }
         if let Some(observer) = self.observer.get() {
             observer
-                .on_state_changed(session_id, &message, &next_state)
+                .on_state_changed(session_id, &message, &final_state)
                 .await?;
         }
-        Ok(next_state)
+        Ok(final_state)
     }
 }
 
@@ -240,7 +266,7 @@ pub struct SessionRegistry<R, E> {
 impl<R, E> SessionRegistry<R, E>
 where
     R: SessionRepository + 'static,
-    E: RuntimeEngine + 'static,
+    E: RuntimeEngine + SessionRuntimeCleanup + 'static,
 {
     pub fn new(repository: Arc<R>, runtime: Arc<E>) -> Self {
         Self {
@@ -278,6 +304,21 @@ where
         handle
     }
 
+    async fn terminal_state_for_session(&self, session_id: SessionId) -> anyhow::Result<Option<SessionState>> {
+        let state = self.repository.load_state(session_id).await?;
+        Ok(state.filter(is_terminal_state))
+    }
+
+    async fn evict_handle_if_terminal(
+        &self,
+        session_id: SessionId,
+        state: &SessionState,
+    ) {
+        if is_terminal_state(state) {
+            self.handles.lock().await.remove(&session_id);
+        }
+    }
+
     pub fn runtime(&self) -> &Arc<E> {
         &self.runtime
     }
@@ -287,14 +328,21 @@ where
 impl<R, E> SessionMessageSink for SessionRegistry<R, E>
 where
     R: SessionRepository + Send + Sync + 'static,
-    E: RuntimeEngine + Send + Sync + 'static,
+    E: RuntimeEngine + SessionRuntimeCleanup + Send + Sync + 'static,
 {
     async fn send_to_session(
         &self,
         session_id: SessionId,
         message: SessionMsg,
     ) -> anyhow::Result<SessionState> {
-        self.session(session_id).await.send(message).await
+        if let Some(state) = self.terminal_state_for_session(session_id).await? {
+            return Ok(state);
+        }
+
+        let handle = self.session(session_id).await;
+        let state = handle.send(message).await?;
+        self.evict_handle_if_terminal(session_id, &state).await;
+        Ok(state)
     }
 }
 
@@ -307,7 +355,7 @@ fn spawn_session_actor<R, E>(
 ) -> SessionHandle
 where
     R: SessionRepository + 'static,
-    E: RuntimeEngine + 'static,
+    E: RuntimeEngine + SessionRuntimeCleanup + 'static,
 {
     let (sender, mut receiver) = mpsc::channel::<SessionRequest>(mailbox_capacity);
 
@@ -323,6 +371,38 @@ where
     SessionHandle { session_id, sender }
 }
 
+fn is_terminal_state(state: &SessionState) -> bool {
+    matches!(state, SessionState::Completed | SessionState::Failed { .. })
+}
+
+fn reconcile_runtime_failure(
+    current_state: &SessionState,
+    message: &SessionMsg,
+    error: anyhow::Error,
+) -> SessionState {
+    match message {
+        SessionMsg::UserCommand(_) | SessionMsg::Recover => SessionState::Failed {
+            reason: error.to_string(),
+        },
+        SessionMsg::Interrupt
+        | SessionMsg::SendKey { .. }
+        | SessionMsg::Terminate
+        | SessionMsg::ApprovalGranted
+        | SessionMsg::ApprovalRejected
+        | SessionMsg::RuntimeProgress { .. }
+        | SessionMsg::RuntimeCompleted { .. }
+        | SessionMsg::RuntimeFailed { .. } => current_state.clone(),
+    }
+}
+
+async fn persist_final_state<R: SessionRepository>(
+    repository: &R,
+    session_id: SessionId,
+    state: &SessionState,
+) -> anyhow::Result<()> {
+    repository.save_state(session_id, state).await
+}
+
 fn should_forward_to_runtime(
     current_state: &SessionState,
     message: &SessionMsg,
@@ -330,10 +410,9 @@ fn should_forward_to_runtime(
 ) -> bool {
     match message {
         SessionMsg::UserCommand(_) => matches!(next_state, SessionState::Running { .. }),
-        SessionMsg::SendKey { .. } => !matches!(
-            current_state,
-            SessionState::Starting | SessionState::Completed
-        ),
+        SessionMsg::SendKey { .. } => {
+            !matches!(current_state, SessionState::Starting) && !is_terminal_state(current_state)
+        },
         SessionMsg::ApprovalGranted | SessionMsg::ApprovalRejected => {
             matches!(current_state, SessionState::WaitingForApproval)
         }
@@ -443,6 +522,121 @@ mod tests {
                 .push((message.clone(), next_state.clone()));
             Ok(())
         }
+    }
+
+    #[async_trait]
+    impl SessionRuntimeCleanup for TestRuntime {
+        async fn clear_runtime_bookkeeping(&self, _session_id: SessionId) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct FailingRuntime {
+        calls: Arc<Mutex<Vec<(SessionMsg, SessionState)>>>,
+    }
+
+    impl Default for FailingRuntime {
+        fn default() -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RuntimeEngine for FailingRuntime {
+        async fn handle(
+            &self,
+            _session_id: SessionId,
+            message: &SessionMsg,
+            next_state: &SessionState,
+        ) -> anyhow::Result<()> {
+            self.calls
+                .lock()
+                .await
+                .push((message.clone(), next_state.clone()));
+            Err(anyhow::anyhow!("runtime dispatch failed"))
+        }
+    }
+
+    #[async_trait]
+    impl SessionRuntimeCleanup for FailingRuntime {
+        async fn clear_runtime_bookkeeping(&self, _session_id: SessionId) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default, Clone)]
+    struct RecordingObserver {
+        calls: Arc<Mutex<Vec<(SessionMsg, SessionState)>>>,
+    }
+
+    #[async_trait]
+    impl SessionStateObserver for RecordingObserver {
+        async fn on_state_changed(
+            &self,
+            _session_id: SessionId,
+            message: &SessionMsg,
+            next_state: &SessionState,
+        ) -> anyhow::Result<()> {
+            self.calls
+                .lock()
+                .await
+                .push((message.clone(), next_state.clone()));
+            Ok(())
+        }
+    }
+
+    #[derive(Default, Clone)]
+    struct RecordingRuntimeCleanup {
+        cleaned: Arc<Mutex<Vec<SessionId>>>,
+    }
+
+    #[async_trait]
+    impl SessionRuntimeCleanup for RecordingRuntimeCleanup {
+        async fn clear_runtime_bookkeeping(&self, session_id: SessionId) -> anyhow::Result<()> {
+            self.cleaned.lock().await.push(session_id);
+            Ok(())
+        }
+    }
+
+    #[derive(Default, Clone)]
+    struct TestRuntimeWithCleanup {
+        calls: Arc<Mutex<Vec<(SessionMsg, SessionState)>>>,
+        cleanup: RecordingRuntimeCleanup,
+    }
+
+    #[async_trait]
+    impl RuntimeEngine for TestRuntimeWithCleanup {
+        async fn handle(
+            &self,
+            _session_id: SessionId,
+            message: &SessionMsg,
+            next_state: &SessionState,
+        ) -> anyhow::Result<()> {
+            self.calls
+                .lock()
+                .await
+                .push((message.clone(), next_state.clone()));
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl SessionRuntimeCleanup for TestRuntimeWithCleanup {
+        async fn clear_runtime_bookkeeping(&self, session_id: SessionId) -> anyhow::Result<()> {
+            self.cleanup.clear_runtime_bookkeeping(session_id).await
+        }
+    }
+
+    #[test]
+    fn is_terminal_state_matches_completed_and_failed_only() {
+        assert!(is_terminal_state(&SessionState::Completed));
+        assert!(is_terminal_state(&SessionState::Failed {
+            reason: "boom".to_string(),
+        }));
+        assert!(!is_terminal_state(&SessionState::Idle));
     }
 
     #[test]
@@ -571,6 +765,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn actor_persists_failed_state_when_user_command_runtime_dispatch_fails() {
+        let repository = Arc::new(TestRepository::default());
+        let runtime = Arc::new(FailingRuntime::default());
+        let observer = Arc::new(RecordingObserver::default());
+        let observer_slot: Arc<OnceLock<Arc<dyn SessionStateObserver>>> = Arc::new(OnceLock::new());
+        assert!(observer_slot
+            .set(observer.clone() as Arc<dyn SessionStateObserver>)
+            .is_ok());
+        let actor = SessionActor::new(
+            Arc::clone(&repository),
+            Arc::clone(&runtime),
+            observer_slot,
+        );
+        let session_id = SessionId::new();
+
+        let result = actor
+            .handle_message(
+                session_id,
+                SessionMsg::UserCommand(UserCommand {
+                    text: "continue".to_string(),
+                }),
+            )
+            .await;
+
+        assert!(matches!(result, Ok(SessionState::Failed { .. })));
+        let persisted = repository.load_state(session_id).await.expect("load state");
+        assert!(matches!(persisted, Some(SessionState::Failed { .. })));
+        assert!(runtime.calls.lock().await.len() == 1);
+        let observer_calls = observer.calls.lock().await.clone();
+        assert_eq!(observer_calls.len(), 1);
+        assert!(matches!(
+            observer_calls[0],
+            (
+                SessionMsg::UserCommand(UserCommand { .. }),
+                SessionState::Failed { .. }
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn actor_persists_failed_state_when_recover_runtime_dispatch_fails_from_starting() {
+        let repository = Arc::new(TestRepository::default());
+        let runtime = Arc::new(FailingRuntime::default());
+        let actor = SessionActor::new(Arc::clone(&repository), Arc::clone(&runtime), Arc::new(OnceLock::new()));
+        let session_id = SessionId::new();
+
+        let result = actor
+            .handle_message(session_id, SessionMsg::Recover)
+            .await;
+
+        assert!(matches!(result, Ok(SessionState::Failed { .. })));
+        let persisted = repository.load_state(session_id).await.expect("load state");
+        assert_eq!(
+            persisted,
+            Some(SessionState::Failed {
+                reason: "runtime dispatch failed".to_string(),
+            })
+        );
+        let calls = runtime.calls.lock().await.clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, SessionMsg::Recover);
+        assert_eq!(calls[0].1, SessionState::Idle);
+    }
+
+    #[tokio::test]
+    async fn actor_persists_original_state_when_send_key_runtime_dispatch_fails() {
+        let repository = Arc::new(TestRepository::default());
+        let session_id = SessionId::new();
+        let running_state = SessionState::Running {
+            active_turn: TurnId::new(),
+        };
+        repository
+            .save_state(session_id, &running_state)
+            .await
+            .expect("seed state");
+        let runtime = Arc::new(FailingRuntime::default());
+        let actor = SessionActor::new(Arc::clone(&repository), Arc::clone(&runtime), Arc::new(OnceLock::new()));
+
+        let result = actor
+            .handle_message(
+                session_id,
+                SessionMsg::SendKey {
+                    key: "Escape".to_string(),
+                },
+            )
+            .await;
+
+        assert_eq!(result.expect("handle send key"), running_state);
+        let persisted = repository.load_state(session_id).await.expect("load state");
+        assert_eq!(persisted, Some(running_state));
+        assert!(runtime.calls.lock().await.len() == 1);
+    }
+
+    #[tokio::test]
+    async fn actor_clears_runtime_bookkeeping_after_terminal_state_is_persisted() {
+        let repository = TestRepository::default();
+        let runtime = TestRuntimeWithCleanup::default();
+        let actor = SessionActor::new(repository, runtime.clone(), Arc::new(OnceLock::new()));
+        let session_id = SessionId::new();
+
+        let next = actor
+            .handle_message(session_id, SessionMsg::Terminate)
+            .await
+            .expect("terminate session");
+
+        assert_eq!(next, SessionState::Completed);
+        assert_eq!(runtime.cleanup.cleaned.lock().await.as_slice(), &[session_id]);
+    }
+
+    #[tokio::test]
     async fn actor_does_not_forward_stale_user_command_after_terminate() {
         let repository = TestRepository::default();
         let runtime = TestRuntime::default();
@@ -622,6 +926,49 @@ mod tests {
 
         assert_eq!(next, SessionState::Completed);
         assert!(runtime.calls.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn registry_evicts_terminal_session_handle_after_terminate() {
+        let repository = Arc::new(TestRepository::default());
+        let runtime = Arc::new(TestRuntime::default());
+        let registry = SessionRegistry::new(Arc::clone(&repository), Arc::clone(&runtime));
+        let session_id = SessionId::new();
+
+        let first = registry.session(session_id).await;
+        let terminated = first
+            .send(SessionMsg::Terminate)
+            .await
+            .expect("terminate session");
+
+        assert_eq!(terminated, SessionState::Completed);
+        registry.evict_handle_if_terminal(session_id, &terminated).await;
+        assert!(!registry.handles.lock().await.contains_key(&session_id));
+    }
+
+    #[tokio::test]
+    async fn registry_does_not_cache_new_handle_for_terminal_session() {
+        let repository = Arc::new(TestRepository::default());
+        let session_id = SessionId::new();
+        repository
+            .save_state(session_id, &SessionState::Completed)
+            .await
+            .expect("seed completed state");
+        let runtime = Arc::new(TestRuntime::default());
+        let registry = SessionRegistry::new(Arc::clone(&repository), Arc::clone(&runtime));
+
+        let next = registry
+            .send_to_session(
+                session_id,
+                SessionMsg::UserCommand(UserCommand {
+                    text: "stale".to_string(),
+                }),
+            )
+            .await
+            .expect("send stale command");
+
+        assert_eq!(next, SessionState::Completed);
+        assert!(registry.handles.lock().await.is_empty());
     }
 
     #[tokio::test]

@@ -10,7 +10,8 @@ use std::{
 use async_trait::async_trait;
 use core_model::{SessionId, SessionMsg, SessionState, TurnId};
 use core_service::{
-    RuntimeEngine, SessionMessageSink, SessionRuntimeConfigurator, SessionRuntimeLiveness,
+    RuntimeEngine, SessionMessageSink, SessionRuntimeCleanup, SessionRuntimeConfigurator,
+    SessionRuntimeLiveness,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -237,7 +238,7 @@ struct LocalRuntimeState {
     delivered_hook_turns: Mutex<HashMap<SessionId, String>>,
     delivered_progress_events: Mutex<HashMap<SessionId, String>>,
     polling_sessions: Mutex<HashSet<SessionId>>,
-    poller_tasks: Mutex<Vec<JoinHandle<()>>>,
+    poller_tasks: Mutex<HashMap<SessionId, JoinHandle<()>>>,
 }
 
 impl Default for LocalRuntimeState {
@@ -249,7 +250,7 @@ impl Default for LocalRuntimeState {
             delivered_hook_turns: Mutex::new(HashMap::new()),
             delivered_progress_events: Mutex::new(HashMap::new()),
             polling_sessions: Mutex::new(HashSet::new()),
-            poller_tasks: Mutex::new(Vec::new()),
+            poller_tasks: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -428,7 +429,7 @@ where
             turns.push_back(turn_id);
         }
         drop(pending_turns);
-        self.ensure_hook_poller(session_id).await;
+        self.start_hook_poller(session_id).await;
     }
 
     async fn dequeue_turn(&self, session_id: SessionId) -> Option<TurnId> {
@@ -693,7 +694,7 @@ where
         Ok(())
     }
 
-    async fn ensure_hook_poller(&self, session_id: SessionId) {
+    pub async fn start_hook_poller(&self, session_id: SessionId) {
         let mut polling_sessions = self.state.polling_sessions.lock().await;
         if !polling_sessions.insert(session_id) {
             return;
@@ -703,12 +704,31 @@ where
         let runtime = self.clone();
         let task = tokio::spawn(async move {
             loop {
+                if !runtime.state.polling_sessions.lock().await.contains(&session_id) {
+                    break;
+                }
                 let _ = runtime.poll_hook_events_once(session_id).await;
                 sleep(Duration::from_secs(2)).await;
             }
         });
 
-        self.state.poller_tasks.lock().await.push(task);
+        self.state.poller_tasks.lock().await.insert(session_id, task);
+    }
+
+    pub async fn stop_hook_poller(&self, session_id: SessionId) {
+        self.state.polling_sessions.lock().await.remove(&session_id);
+        if let Some(task) = self.state.poller_tasks.lock().await.remove(&session_id) {
+            task.abort();
+        }
+    }
+
+    pub async fn clear_runtime_bookkeeping(&self, session_id: SessionId) -> anyhow::Result<()> {
+        self.stop_hook_poller(session_id).await;
+        self.state.pending_turns.lock().await.remove(&session_id);
+        self.state.project_roots.lock().await.remove(&session_id);
+        self.state.delivered_hook_turns.lock().await.remove(&session_id);
+        self.state.delivered_progress_events.lock().await.remove(&session_id);
+        Ok(())
     }
 }
 
@@ -735,7 +755,7 @@ where
 
         match message {
             SessionMsg::Recover => {
-                self.ensure_hook_poller(session_id).await;
+                self.start_hook_poller(session_id).await;
                 if !self.tmux.has_session(&target).await? {
                     let working_directory = self
                         .project_root(session_id)
@@ -838,6 +858,16 @@ where
 {
     async fn is_session_alive(&self, session_id: SessionId) -> anyhow::Result<bool> {
         self.tmux.has_session(&session_id.0.to_string()).await
+    }
+}
+
+#[async_trait]
+impl<T> SessionRuntimeCleanup for LocalRuntime<T>
+where
+    T: TmuxClient + Clone + 'static,
+{
+    async fn clear_runtime_bookkeeping(&self, session_id: SessionId) -> anyhow::Result<()> {
+        LocalRuntime::clear_runtime_bookkeeping(self, session_id).await
     }
 }
 
@@ -1141,6 +1171,37 @@ mod tests {
                 orphan.0.to_string(),
             ]]
         );
+    }
+
+    #[tokio::test]
+    async fn clear_runtime_bookkeeping_removes_pending_turns_and_progress_tracking() {
+        let tmux = RecordingTmux::default();
+        let runtime = test_runtime(tmux);
+        let session_id = SessionId::new();
+        let turn_id = TurnId::new();
+
+        runtime.recover_active_turn(session_id, turn_id).await;
+        runtime
+            .state
+            .delivered_hook_turns
+            .lock()
+            .await
+            .insert(session_id, "turn-1".to_string());
+        runtime
+            .state
+            .delivered_progress_events
+            .lock()
+            .await
+            .insert(session_id, "progress-1".to_string());
+
+        runtime
+            .clear_runtime_bookkeeping(session_id)
+            .await
+            .expect("clear runtime bookkeeping");
+
+        assert_eq!(runtime.current_turn(session_id).await, None);
+        assert!(!runtime.state.delivered_hook_turns.lock().await.contains_key(&session_id));
+        assert!(!runtime.state.delivered_progress_events.lock().await.contains_key(&session_id));
     }
 
     #[tokio::test]

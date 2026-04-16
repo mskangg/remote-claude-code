@@ -6,7 +6,8 @@ use core_model::{
     SessionId, SessionMsg, SessionState, TransportBinding, TransportStatusMessage, UserCommand,
 };
 use core_service::{
-    RuntimeEngine, SessionHandle, SessionRegistry, SessionRepository, SessionRuntimeConfigurator,
+    RuntimeEngine, SessionHandle, SessionRegistry, SessionRepository, SessionRuntimeCleanup,
+    SessionRuntimeConfigurator,
 };
 use futures_util::{SinkExt, StreamExt};
 use hyper_rustls::HttpsConnectorBuilder;
@@ -446,7 +447,7 @@ where
 impl<R, E> SessionHandleResolver for SessionRegistry<R, E>
 where
     R: SessionRepository + Send + Sync + 'static,
-    E: RuntimeEngine + Send + Sync + 'static,
+    E: RuntimeEngine + SessionRuntimeCleanup + Send + Sync + 'static,
 {
     async fn resolve(&self, session_id: SessionId) -> Result<SessionHandle> {
         Ok(self.session(session_id).await)
