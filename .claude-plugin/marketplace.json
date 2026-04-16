@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "remote-claude-code-setup",
-      "source": "./plugins/remote-claude-code-setup",
+      "source": "./.claude-plugin/plugins/remote-claude-code-setup",
       "description": "Guided setup wizard for Remote Claude Code. Tries Slack app creation through apps.manifest.create when a config token is available, falls back to a verified semi-automatic Slack flow, collects required values one step at a time, runs doctor verification, and prepares a runnable release binary.",
       "version": "0.1.0"
     }
