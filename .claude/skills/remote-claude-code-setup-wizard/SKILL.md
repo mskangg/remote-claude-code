@@ -129,12 +129,14 @@ cargo build --release -p rcc
 > 이미 알고 있는 값은 먼저 채워둘게요.
 
 ### Step 3. Config token check
-> Slack 앱 자동 생성을 먼저 시도할 수 있어요.
-> 그러려면 `app configuration token`이 필요합니다.
-> 이미 있으면 바로 붙여주세요. 없으면 발급 단계로 안내할게요.
+> 먼저 Slack 앱을 자동으로 만들 수 있는지 확인할게요.
+> 그러려면 **Slack app configuration token**이 필요합니다.
+> 이 토큰이 있으면 제가 Slack 앱 생성을 먼저 자동으로 시도할 수 있어요.
+> 이미 있으면 붙여주세요. 없으면 지금 발급 단계로 안내할게요.
 
 ### Step 3-B. Config token issuance
-> 좋아요. app configuration token 발급 단계로 갈게요.
+> 좋아요. 그럼 Slack app configuration token부터 만들게요.
+> 이 토큰은 **Slack 앱을 자동 생성할 때 쓰는 전용 토큰**입니다.
 >
 > 1. Slack 앱 관리 화면으로 이동
 > 2. `Generate Token` 클릭
@@ -144,6 +146,7 @@ cargo build --release -p rcc
 
 설명 보강:
 > `Generate Token`을 누른 뒤 바로 끝나는 게 아니라, 원하는 workspace를 선택한 다음 토큰을 만들어야 합니다.
+> 이 토큰이 있으면 앱 생성 단계 일부를 제가 대신 처리할 수 있습니다.
 
 ### Step 4. Manifest API create attempt
 성공 시:
