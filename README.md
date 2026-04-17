@@ -71,9 +71,15 @@ setup wizard는 다음 순서로 진행됩니다.
 - 로컬 환경 확인
 - Slack 콘솔 단계 안내
   - 링크: `https://api.slack.com/apps?new_app=1`
-  - manifest 제공 (보기용 + raw)
+  - manifest inline 제공
 - 필요한 값을 한 단계씩 수집
-- artifact 기반 resume
+  - `Signing Secret`
+  - `Bot User OAuth Token`
+  - `App-Level Token` (`connections:write`)
+  - `allowedUserId`
+  - `channelId`
+  - `projectLabel`
+- artifact readiness 확인 후 resume
 - `doctor`
 - release binary 준비
 
@@ -106,20 +112,20 @@ rcc service start
 
 ```bash
 cargo run -p rcc -- setup
-cargo run -p rcc -- setup --merge-slack-artifact docs/slack-setup-artifact-patch.example.json --json
+cargo run -p rcc -- setup --merge-slack-artifact .local/slack-setup-artifact.json --json
 cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive
 cargo run -p rcc -- doctor
 cargo build --release -p rcc
 ./target/release/rcc
 ```
 
-`setup`은 automation-first 설치 마법사이지만, 현재 공개 기본 경로는 검증된 semi-automatic Slack 콘솔 루트입니다. Claude가 단계별로 링크와 manifest를 제공하고, 값은 하나씩 받아 artifact 기반으로 resume, `doctor`, release build까지 이어집니다.
+`setup`은 automation-first 설치 마법사이지만, 현재 공개 기본 경로는 검증된 semi-automatic Slack 콘솔 루트입니다. Claude가 단계별로 링크와 manifest를 제공하고, 값은 하나씩 받아 artifact readiness를 확인한 뒤 resume, `doctor`, release build까지 이어집니다.
 
 #### Experimental manifest API path
 
 Slack app configuration token이 있으면 `apps.manifest.create` 경로를 실험적으로 시도할 수 있습니다. 다만 현재는 응답과 동작이 안정적이지 않아 공개 기본 경로로 권장하지 않습니다.
 
-앱 실행 뒤 Slack에서 `/cc`를 실행하면 됩니다.
+앱 실행 뒤 대상 채널에서 먼저 `/invite @Remote Claude Code`를 한 번 실행한 다음, Slack에서 `/cc`를 실행하면 됩니다.
 
 더 자세한 설정은 [`docs/slack-setup.md`](docs/slack-setup.md)에서 볼 수 있습니다.
 
