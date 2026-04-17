@@ -67,6 +67,7 @@ manifest가 필요하면 아래 중 하나를 제공한다.
 5. `channelId`
    - 형식: `C...`
    - 위치: 사용할 채널 열기 → 채널 세부정보 → 맨 아래 `Copy channel ID`
+   - 채널을 만든 직후에는 먼저 `/invite @Remote Claude Code`로 bot user를 초대해야 thread reply가 정상 동작한다
 
 ### 6. Use the artifact bridge for all machine steps
 기본 artifact 경로:
@@ -146,6 +147,7 @@ cargo build --release -p rcc
 ### Step 10. Channel ID
 > 이제 `channelId`가 필요합니다.
 > 사용할 채널을 열고 채널 세부정보를 연 뒤, 맨 아래의 `Copy channel ID`를 눌러 `C...` 값을 보내주세요.
+> 그리고 채널을 만든 직후라면 **`/invite @Remote Claude Code`** 로 bot user를 먼저 초대해 주세요. 초대 전에는 `/cc` 루트 메시지는 보여도 thread reply가 세션으로 전달되지 않을 수 있습니다.
 
 ### Step 11. Artifact readiness
 부족할 때:

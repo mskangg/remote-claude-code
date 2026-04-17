@@ -776,7 +776,7 @@ pub fn format_setup_doctor_failures(checks: &[DoctorCheck]) -> String {
             "slack_bot_token" | "slack_app_token" | "slack_signing_secret" | "slack_allowed_user_id" => {
                 "Slack 설정 페이지에서 값을 다시 확인하고 setup을 다시 실행하세요."
             }
-            "channel_project_mapping" => "channel-projects.json 경로와 channelId/projectRoot 값을 다시 확인하세요.",
+            "channel_project_mapping" => "channel-projects.json 경로와 channelId/projectRoot 값을 다시 확인하세요. Invite the bot user to the target channel before testing thread replies.",
             _ => "출력된 detail을 확인하고 해당 항목을 수정한 뒤 doctor를 다시 실행하세요.",
         };
         lines.push(format!("- {}: {}", check.name, action));
@@ -820,6 +820,7 @@ pub fn slack_manual_required_outcome(input: &SetupInput, artifact_path: &Path) -
     let mut next_actions = vec![
         "Create the app from slack/app-manifest.json".to_string(),
         "Install the app to the workspace and collect the generated tokens".to_string(),
+        "Invite the bot user to the target channel before testing thread replies".to_string(),
         format!(
             "A prefilled Slack artifact template was written to {}",
             artifact_path

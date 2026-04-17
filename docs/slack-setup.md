@@ -125,12 +125,16 @@ non-interactive 규칙:
 1. Slack에서 사용할 채널을 엽니다.
 2. 채널 세부정보를 엽니다.
 3. 맨 아래의 **`Copy channel ID`** 를 눌러 `C...` 값을 복사합니다.
+4. 채널을 만든 직후에는 **`/invite @Remote Claude Code`** 로 bot user를 먼저 초대합니다.
 
-채널 URL 마지막의 `C...` 값을 복사하는 방법도 있지만, 기본 안내는 채널 세부정보의 `Copy channel ID`를 권장합니다.
+채널 URL 마지막의 `C...` 값을 복사하는 방법도 있지만, 기본 안내는 채널 세부정보의 `Copy channel ID`를 권장합니다. bot user 초대 전에는 `/cc` 루트 메시지는 보여도 thread reply가 세션으로 전달되지 않을 수 있습니다.
 
 ## Doctor가 확인하는 것
 
 현재 `doctor`는 다음 항목을 확인합니다.
+
+추가 운영 체크:
+- 테스트 전에 대상 채널에 **`/invite @Remote Claude Code`** 를 실행했는지 확인하세요.
 
 1. required Slack env vars 존재 여부
 2. `.env.local` 존재 여부

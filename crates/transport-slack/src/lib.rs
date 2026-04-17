@@ -2251,6 +2251,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_push_thread_reply_rejects_message_without_top_level_text() {
+        let parsed = parse_push_thread_reply(&SlackPushEventCallback {
+            team_id: SlackTeamId("T123".into()),
+            api_app_id: SlackAppId("A123".into()),
+            event: SlackEventCallbackBody::Message(SlackMessageEvent {
+                origin: SlackMessageOrigin {
+                    ts: SlackTs("1740.200".into()),
+                    channel: Some(SlackChannelId("C123".into())),
+                    channel_type: None,
+                    thread_ts: Some(SlackTs("1740.100".into())),
+                    client_msg_id: None,
+                },
+                content: Some(SlackMessageContent {
+                    text: None,
+                    blocks: None,
+                    attachments: None,
+                    upload: None,
+                    files: None,
+                    reactions: None,
+                    metadata: None,
+                }),
+                sender: SlackMessageSender {
+                    user: Some(SlackUserId("U123".into())),
+                    bot_id: None,
+                    username: None,
+                    display_as_bot: None,
+                    user_profile: None,
+                    bot_profile: None,
+                },
+                subtype: None,
+                hidden: None,
+                message: Some(SlackMessageEventEdited {
+                    ts: SlackTs("1740.200".into()),
+                    content: Some(SlackMessageContent::new().with_text("continue".to_string())),
+                    sender: SlackMessageSender {
+                        user: Some(SlackUserId("U123".into())),
+                        bot_id: None,
+                        username: None,
+                        display_as_bot: None,
+                        user_profile: None,
+                        bot_profile: None,
+                    },
+                    edited: None,
+                }),
+                previous_message: None,
+                deleted_ts: None,
+            }),
+            event_id: SlackEventId("Ev123".into()),
+            event_time: SlackDateTime(Utc::now()),
+            event_context: None,
+            authed_users: None,
+            authorizations: None,
+        });
+
+        assert_eq!(parsed, None);
+    }
+
     #[tokio::test]
     async fn handle_thread_reply_routes_text_to_bound_session() {
         let store = Arc::new(InMemorySlackBindingStore::new());

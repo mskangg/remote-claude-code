@@ -742,6 +742,7 @@ mod tests {
             .to_string()
             .contains(".local/slack-setup-artifact.json"));
         assert!(error.to_string().contains("--from-slack-artifact"));
+        assert!(error.to_string().contains("Invite the bot user to the target channel before testing thread replies"));
         assert!(prompter.output().contains("manual-assisted"));
         assert!(workspace_root.join(".local/slack-setup-artifact.json").exists());
         assert!(error
@@ -1704,5 +1705,17 @@ mod tests {
             scopes.iter().any(|scope| scope.as_str() == Some("chat:write.public")),
             "bundled manifest must include chat:write.public so `/cc` can create the session thread in mapped public channels"
         );
+    }
+
+    #[test]
+    fn format_doctor_failures_tells_user_to_invite_bot_to_channel() {
+        let checks = vec![DoctorCheck {
+            name: "channel_project_mapping",
+            ok: false,
+            detail: "channel project mapping: /tmp/data/channel-projects.json".to_string(),
+        }];
+
+        let output = setup::format_setup_doctor_failures(&checks);
+        assert!(output.contains("Invite the bot user to the target channel"));
     }
 }
