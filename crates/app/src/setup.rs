@@ -814,8 +814,16 @@ pub fn pending_install_script_path(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".local").join("install-rcc.sh")
 }
 
-pub fn install_source_binary_path() -> Result<PathBuf> {
-    Ok(std::env::current_exe().context("resolve current executable path")?)
+pub fn release_binary_path(workspace_root: &Path) -> PathBuf {
+    workspace_root.join("target").join("release").join("rcc")
+}
+
+pub fn ensure_release_binary_exists(workspace_root: &Path) -> Result<PathBuf> {
+    let path = release_binary_path(workspace_root);
+    if path.exists() {
+        return Ok(path);
+    }
+    bail!("release binary not found at {}", path.display())
 }
 
 pub fn build_shell_install_script(
@@ -858,6 +866,18 @@ pub fn run_install_script(path: &Path) -> Result<()> {
         return Ok(());
     }
     bail!("install script failed with status {status}")
+}
+
+pub fn run_release_build(workspace_root: &Path) -> Result<()> {
+    let status = Command::new("cargo")
+        .args(["build", "--release", "-p", "rcc"])
+        .current_dir(workspace_root)
+        .status()
+        .context("run cargo build --release -p rcc")?;
+    if status.success() {
+        return Ok(());
+    }
+    bail!("cargo build --release -p rcc failed with status {status}")
 }
 
 pub fn format_setup_completion_message(installed_binary_path: &Path, profile_path: &Path, installer_script_path: &Path) -> String {
@@ -996,7 +1016,7 @@ pub async fn execute_setup(
         let install_path = default_install_path()?;
         let profile_path = default_shell_profile_path()?;
         let installer_script_path = pending_install_script_path(workspace_root);
-        let source_binary_path = install_source_binary_path()?;
+        let source_binary_path = ensure_release_binary_exists(workspace_root)?;
         let installer_script = build_shell_install_script(
             &source_binary_path,
             &install_path,
@@ -1174,5 +1194,6 @@ pub async fn run_setup(config: &AppConfig, args: &[String]) -> Result<()> {
     }
 
     let resolved = resolve_setup_input(input, true, &mut prompter).await?;
+    run_release_build(&workspace_root)?;
     execute_setup(config, &workspace_root, resolved, &mut prompter).await
 }

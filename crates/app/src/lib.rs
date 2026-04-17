@@ -714,10 +714,59 @@ mod tests {
     }
 
     #[test]
-    fn install_source_binary_path_uses_current_executable() {
-        let path = setup::install_source_binary_path().expect("current executable path");
-        assert!(path.is_absolute());
-        assert_ne!(path, std::path::PathBuf::from("./target/release/rcc"));
+    fn release_binary_path_uses_workspace_target_release() {
+        let path = setup::release_binary_path(std::path::Path::new("/tmp/workspace"));
+        assert_eq!(path, std::path::PathBuf::from("/tmp/workspace/target/release/rcc"));
+    }
+
+    #[tokio::test]
+    async fn run_setup_non_interactive_builds_release_binary_before_install() {
+        let _guard = cwd_lock();
+        let temp_dir = tempdir().expect("create temp dir");
+        let workspace_root = temp_dir.path();
+        fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
+        fs::write(workspace_root.join("slack/app-manifest.json"), "{}\n").expect("write manifest");
+        fs::create_dir_all(workspace_root.join(".claude")).expect("create claude dir");
+        fs::write(workspace_root.join(".env.local"), "SLACK_BOT_TOKEN=x\nSLACK_APP_TOKEN=x\nSLACK_SIGNING_SECRET=x\nSLACK_ALLOWED_USER_ID=U123\n").expect("write env");
+        fs::create_dir_all(workspace_root.join("data")).expect("create data dir");
+        fs::write(
+            workspace_root.join("data/channel-projects.json"),
+            "[{\"channelId\":\"C123\",\"projectRoot\":\"/tmp/project\",\"projectLabel\":\"demo\"}]",
+        )
+        .expect("write mapping");
+        fs::create_dir_all(workspace_root.join(".local/hooks")).expect("create hooks dir");
+        fs::write(
+            workspace_root.join(".local/slack-setup-artifact.json"),
+            "{\"slack\":{\"botToken\":\"xoxb\",\"signingSecret\":\"sign\",\"appToken\":\"xapp\",\"allowedUserId\":\"U123\"},\"channel\":{\"id\":\"C123\",\"projectRoot\":\"/tmp/project\",\"projectLabel\":\"demo\"}}",
+        )
+        .expect("write artifact");
+
+        let original_dir = env::current_dir().expect("cwd");
+        env::set_current_dir(workspace_root).expect("chdir");
+        let config = AppConfig {
+            state_db_path: workspace_root.join(".local/state.db"),
+            channel_project_store_path: workspace_root.join("data/channel-projects.json"),
+            runtime_working_directory: workspace_root.display().to_string(),
+            runtime_launch_command: "claude".to_string(),
+            runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
+            runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+        };
+
+        let result = setup::run_setup(
+            &config,
+            &[
+                "rcc".to_string(),
+                "setup".to_string(),
+                "--from-slack-artifact".to_string(),
+                ".local/slack-setup-artifact.json".to_string(),
+                "--non-interactive".to_string(),
+            ],
+        )
+        .await;
+        env::set_current_dir(original_dir).expect("restore cwd");
+
+        let error = result.expect_err("build step is not implemented yet");
+        assert!(error.to_string().contains("cargo build --release -p rcc"));
     }
 
     #[tokio::test]
@@ -748,6 +797,15 @@ mod tests {
             fs::set_permissions(bin_dir.join("tmux"), perms).expect("chmod fake tmux");
         }
         unsafe { env::set_var("PATH", format!("{}:/usr/bin:/bin", bin_dir.display())) };
+        fs::create_dir_all(workspace_root.join("target/release")).expect("create release dir");
+        fs::write(workspace_root.join("target/release/rcc"), "#!/bin/sh\nexit 0\n").expect("write fake release binary");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut release_perms = fs::metadata(workspace_root.join("target/release/rcc")).expect("release metadata").permissions();
+            release_perms.set_mode(0o755);
+            fs::set_permissions(workspace_root.join("target/release/rcc"), release_perms).expect("chmod fake release binary");
+        }
 
         let config = AppConfig {
             state_db_path: workspace_root.join(".local/state.db"),
