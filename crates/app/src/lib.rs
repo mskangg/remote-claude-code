@@ -737,7 +737,11 @@ mod tests {
         .expect_err("missing values should stop after manual-required guidance");
 
         assert!(error.to_string().contains("Slack app approval is still required"));
+        assert!(error.to_string().contains("projectRoot already prepared"));
+        assert!(error.to_string().contains("projectLabel already prepared: demo-project"));
         assert!(error.to_string().contains("channelId already prepared: C123"));
+        assert!(error.to_string().contains("One Slack channel maps to one project"));
+        assert!(error.to_string().contains("Create or choose the Slack channel for this project"));
         assert!(error
             .to_string()
             .contains(".local/slack-setup-artifact.json"));
@@ -778,8 +782,8 @@ mod tests {
         let mut prompter = setup::FakePrompter::new(vec![
             setup::FakeAnswer::Secret("signing-secret".into()),
             setup::FakeAnswer::Secret("xapp-app".into()),
-            setup::FakeAnswer::Prompt("C123".into()),
             setup::FakeAnswer::Prompt("demo".into()),
+            setup::FakeAnswer::Prompt("C123".into()),
         ]);
 
         let resolved = setup::resolve_setup_input(partial, false, &mut prompter)

@@ -114,18 +114,27 @@ non-interactive 규칙:
 
 ## Channel mapping
 
+Remote Claude Code에서는 **Slack 채널 하나가 프로젝트 하나를 대표합니다.**
+즉 setup은 먼저 어떤 로컬 프로젝트를 연결할지 정하고, 그 다음 그 프로젝트를 대표할 Slack 채널을 준비한 뒤 마지막에 `channelId`로 mapping을 완성해야 자연스럽습니다.
+
 `data/channel-projects.example.json`을 복사해 `data/channel-projects.json`을 만들고, 아래 값을 실제 환경에 맞게 바꿉니다.
 
-- `channelId`
 - `projectRoot`
 - `projectLabel`
+- `channelId`
+
+권장 순서:
+1. 먼저 연결할 로컬 프로젝트의 `projectRoot`를 정합니다.
+2. Slack에서 보일 `projectLabel`을 정합니다.
+3. 이 프로젝트용 Slack 채널을 새로 만들거나 기존 채널을 고릅니다.
+4. 채널을 만든 직후에는 **`/invite @Remote Claude Code`** 로 bot user를 먼저 초대합니다.
+5. 그 다음 채널 세부정보에서 `channelId`를 복사해 mapping을 완성합니다.
 
 ### `channelId` 얻는 방법
 
-1. Slack에서 사용할 채널을 엽니다.
+1. Slack에서 이 프로젝트용으로 사용할 채널을 엽니다.
 2. 채널 세부정보를 엽니다.
 3. 맨 아래의 **`Copy channel ID`** 를 눌러 `C...` 값을 복사합니다.
-4. 채널을 만든 직후에는 **`/invite @Remote Claude Code`** 로 bot user를 먼저 초대합니다.
 
 채널 URL 마지막의 `C...` 값을 복사하는 방법도 있지만, 기본 안내는 채널 세부정보의 `Copy channel ID`를 권장합니다. bot user 초대 전에는 `/cc` 루트 메시지는 보여도 thread reply가 세션으로 전달되지 않을 수 있습니다.
 

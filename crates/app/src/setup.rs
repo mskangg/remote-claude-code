@@ -798,14 +798,14 @@ pub fn pending_slack_artifact_path(workspace_root: &Path) -> PathBuf {
 pub fn slack_setup_prefill(input: &SetupInput) -> Vec<String> {
     let mut lines = Vec::new();
 
-    if let Some(channel_id) = input.channel_id.as_deref() {
-        lines.push(format!("channelId already prepared: {channel_id}"));
-    }
     if let Some(project_root) = input.project_root.as_deref() {
         lines.push(format!("projectRoot already prepared: {project_root}"));
     }
     if let Some(project_label) = input.project_label.as_deref() {
         lines.push(format!("projectLabel already prepared: {project_label}"));
+    }
+    if let Some(channel_id) = input.channel_id.as_deref() {
+        lines.push(format!("channelId already prepared: {channel_id}"));
     }
 
     if lines.is_empty() {
@@ -820,7 +820,10 @@ pub fn slack_manual_required_outcome(input: &SetupInput, artifact_path: &Path) -
     let mut next_actions = vec![
         "Create the app from slack/app-manifest.json".to_string(),
         "Install the app to the workspace and collect the generated tokens".to_string(),
+        "One Slack channel maps to one project. Confirm which local project you are connecting first".to_string(),
+        "Create or choose the Slack channel for this project".to_string(),
         "Invite the bot user to the target channel before testing thread replies".to_string(),
+        "After the channel is ready, collect channelId and finish the channel-project mapping".to_string(),
         format!(
             "A prefilled Slack artifact template was written to {}",
             artifact_path
@@ -864,14 +867,14 @@ pub async fn resolve_setup_input(
     if input.slack_allowed_user_id.is_none() {
         input.slack_allowed_user_id = Some(prompter.prompt("SLACK_ALLOWED_USER_ID")?);
     }
-    if input.channel_id.is_none() {
-        input.channel_id = Some(prompter.prompt("channelId")?);
-    }
     if input.project_root.is_none() {
         input.project_root = Some(prompter.prompt("projectRoot")?);
     }
     if input.project_label.is_none() {
         input.project_label = Some(prompter.prompt("projectLabel")?);
+    }
+    if input.channel_id.is_none() {
+        input.channel_id = Some(prompter.prompt("channelId")?);
     }
     Ok(input)
 }

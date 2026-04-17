@@ -38,7 +38,7 @@ description: Use when setting up Remote Claude Code, connecting Slack, creating 
 브라우저 전면 자동화나 manifest API-first 경로는 기본 경로가 아니다. 실제로 검증된 성공 경로는 아래였다.
 
 - 링크: `https://api.slack.com/apps?new_app=1`
-- `Create app from manifest`
+- `From a manifest` 선택
 - workspace 선택
 - `slack/app-manifest.json` 내용 붙여넣기
 - 완료 후 `계속`
@@ -64,10 +64,16 @@ manifest가 필요하면 아래 중 하나를 제공한다.
 4. `allowedUserId`
    - 형식: `U...`
    - 위치: 프로필 → 세 점 → `Copy member ID`
-5. `channelId`
+5. `projectRoot`
+   - 형식: 절대 경로
+   - 먼저 어떤 로컬 프로젝트를 Slack 채널과 연결할지 정한다
+6. `projectLabel`
+   - 형식: Slack에서 보일 프로젝트 이름
+   - 기본적으로는 `projectRoot`의 basename을 후보로 본다
+7. `channelId`
    - 형식: `C...`
-   - 위치: 사용할 채널 열기 → 채널 세부정보 → 맨 아래 `Copy channel ID`
-   - 채널을 만든 직후에는 먼저 `/invite @Remote Claude Code`로 bot user를 초대해야 thread reply가 정상 동작한다
+   - 채널 하나가 프로젝트 하나를 대표한다는 점을 먼저 안내한다
+   - 프로젝트용 채널을 만든 뒤 bot user를 초대한 다음 채널 세부정보에서 수집한다
 
 ### 6. Use the artifact bridge for all machine steps
 기본 artifact 경로:
@@ -121,7 +127,7 @@ cargo build --release -p rcc
 ### Step 3. Manual manifest step
 > 지금은 Slack 콘솔 단계예요.
 > 1. 아래 링크를 열어 주세요.
-> 2. `Create app from manifest`를 선택해 주세요.
+> 2. `From a manifest`를 선택해 주세요.
 > 3. workspace를 선택해 주세요.
 > 4. 아래 manifest를 붙여넣어 앱을 생성해 주세요.
 > 완료되면 `계속`이라고 보내주세요.
@@ -144,10 +150,19 @@ cargo build --release -p rcc
 > 다음은 `allowedUserId`입니다.
 > Slack에서 `프로필 → 세 점 → Copy member ID`로 확인한 `U...` 값을 보내주세요.
 
-### Step 10. Channel ID
-> 이제 `channelId`가 필요합니다.
-> 사용할 채널을 열고 채널 세부정보를 연 뒤, 맨 아래의 `Copy channel ID`를 눌러 `C...` 값을 보내주세요.
-> 그리고 채널을 만든 직후라면 **`/invite @Remote Claude Code`** 로 bot user를 먼저 초대해 주세요. 초대 전에는 `/cc` 루트 메시지는 보여도 thread reply가 세션으로 전달되지 않을 수 있습니다.
+### Step 10. Project root
+> 이제 어떤 로컬 프로젝트를 연결할지 정할게요.
+> `projectRoot` 절대 경로를 보내주세요.
+
+### Step 11. Project label
+> 이 프로젝트가 Slack에서 어떤 이름으로 보일지 정할게요.
+> `projectLabel`을 보내주세요. 원하면 `projectRoot` basename 기준으로 정해도 됩니다.
+
+### Step 12. Channel ID
+> 이제 이 프로젝트를 대표할 Slack 채널을 준비할 차례예요. 채널 하나가 프로젝트 하나를 대표합니다.
+> 이 프로젝트용 채널을 새로 만들거나 기존 채널을 고른 뒤, 반드시 **`/invite @Remote Claude Code`** 로 방금 만든 bot user를 먼저 초대해 주세요.
+> 그 다음 채널 세부정보를 열고 맨 아래의 `Copy channel ID`를 눌러 `C...` 값을 보내주세요.
+> 초대 전에는 `/cc` 루트 메시지는 보여도 thread reply가 세션으로 전달되지 않을 수 있습니다.
 
 ### Step 11. Artifact readiness
 부족할 때:
