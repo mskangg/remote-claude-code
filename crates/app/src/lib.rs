@@ -1946,6 +1946,20 @@ mod tests {
     }
 
     #[test]
+    fn bundled_hook_settings_do_not_depend_on_relative_env_file() {
+        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("workspace root")
+            .to_path_buf();
+        let hooks_path = workspace_root.join(".claude").join("claude-stop-hooks.json");
+        let hooks = fs::read_to_string(&hooks_path).expect("read bundled hook settings");
+
+        assert!(!hooks.contains("--env-file=.env.local"));
+        assert!(hooks.contains("claude-stop-hook.mjs"));
+    }
+
+    #[test]
     fn format_doctor_failures_tells_user_to_invite_bot_to_channel() {
         let checks = vec![DoctorCheck {
             name: "channel_project_mapping",
