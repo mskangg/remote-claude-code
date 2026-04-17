@@ -79,11 +79,21 @@ setup wizard는 다음 순서로 진행됩니다.
 
 `apps.manifest.create` 기반 자동 생성 경로는 코드에 남아 있지만, 현재 공개 기본 경로로는 사용하지 않습니다.
 
-### 4. 실행 파일 준비 및 실행
+### 4. 설치 완료 후 실행
+
+설치가 끝나면 기본 실행 경로는 아래처럼 안내합니다.
 
 ```bash
-cargo build --release -p rcc
-./target/release/rcc
+rcc
+```
+
+기본 설치 대상은 사용자 로컬 경로 기준 `~/.local/bin/rcc`입니다. setup 마지막에는 이 경로와 shell profile 업데이트를 위한 installer script를 함께 안내합니다.
+
+상시 실행 UX는 제품 CLI 기준으로 맞춥니다.
+
+```bash
+rcc service install
+rcc service start
 ```
 
 ### Direct CLI path

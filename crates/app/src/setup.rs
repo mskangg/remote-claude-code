@@ -3,6 +3,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use anyhow::{bail, Context, Result};
@@ -791,6 +792,66 @@ pub fn format_missing_fields_for_automation(missing: &[&'static str]) -> String 
     )
 }
 
+pub fn default_install_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home).join(".local").join("bin").join("rcc"))
+}
+
+pub fn default_shell_profile_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let file_name = if shell.contains("zsh") {
+        ".zshrc"
+    } else if shell.contains("bash") {
+        ".bashrc"
+    } else {
+        ".profile"
+    };
+    Ok(PathBuf::from(home).join(file_name))
+}
+
+pub fn pending_install_script_path(workspace_root: &Path) -> PathBuf {
+    workspace_root.join(".local").join("install-rcc.sh")
+}
+
+pub fn build_shell_install_script(source_binary_path: &Path, install_path: &Path, profile_path: &Path) -> String {
+    format!(
+        "#!/usr/bin/env sh\nset -eu\nmkdir -p \"{}\"\ninstall -m 755 \"{}\" \"{}\"\nif ! grep -Fq 'export PATH=\"$HOME/.local/bin:$PATH\"' \"{}\" 2>/dev/null; then\n  printf '\nexport PATH=\"$HOME/.local/bin:$PATH\"\n' >> \"{}\"\nfi\nprintf 'Installed rcc to {}\\n'\nprintf 'Open a new shell or run: . {}\\n'\n",
+        install_path.parent().map(|path| path.display().to_string()).unwrap_or_else(|| ".".to_string()),
+        source_binary_path.display(),
+        install_path.display(),
+        profile_path.display(),
+        profile_path.display(),
+        install_path.display(),
+        profile_path.display(),
+    )
+}
+
+pub fn should_run_installer(answer: &str) -> bool {
+    let normalized = answer.trim().to_ascii_lowercase();
+    normalized.is_empty() || normalized == "y" || normalized == "yes"
+}
+
+pub fn run_install_script(path: &Path) -> Result<()> {
+    let status = Command::new("sh")
+        .arg(path)
+        .status()
+        .with_context(|| format!("run install script: {}", path.display()))?;
+    if status.success() {
+        return Ok(());
+    }
+    bail!("install script failed with status {status}")
+}
+
+pub fn format_setup_completion_message(installed_binary_path: &Path, profile_path: &Path, installer_script_path: &Path) -> String {
+    format!(
+        "Setup complete. Run the generated installer script with `sh {}` to install `rcc` at {} and update {} if needed. After that, use `rcc` for foreground execution or `rcc service install && rcc service start` for background execution.",
+        installer_script_path.display(),
+        installed_binary_path.display(),
+        profile_path.display(),
+    )
+}
+
 pub fn pending_slack_artifact_path(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".local").join("slack-setup-artifact.json")
 }
@@ -915,7 +976,32 @@ pub async fn execute_setup(
     let checks = run_doctor(config, workspace_root);
     print_doctor_summary(prompter, &checks);
     if checks.iter().all(|check| check.ok) {
-        prompter.println("Setup complete. You can now run: cargo run -p rcc");
+        let install_path = default_install_path()?;
+        let profile_path = default_shell_profile_path()?;
+        let installer_script_path = pending_install_script_path(workspace_root);
+        let installer_script = build_shell_install_script(Path::new("./target/release/rcc"), &install_path, &profile_path);
+        if let Some(parent) = install_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if let Some(parent) = installer_script_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&installer_script_path, installer_script)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&installer_script_path)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&installer_script_path, perms)?;
+        }
+        prompter.println(&format_setup_completion_message(&install_path, &profile_path, &installer_script_path));
+        let answer = prompter.prompt("설치 스크립트를 지금 실행할까요? [Y/n]")?;
+        if should_run_installer(&answer) {
+            run_install_script(&installer_script_path)?;
+            prompter.println("Installer script executed successfully.");
+        } else {
+            prompter.println(&format!("Run this later with: sh {}", installer_script_path.display()));
+        }
         Ok(())
     } else {
         bail!(format_setup_doctor_failures(&checks))

@@ -98,12 +98,13 @@ cargo build --release -p rcc
 - `ready: false`면 `missing` 필드만 다시 요청한다.
 - `ready: true`면 바로 `resumeCommand`를 실행한다.
 
-### 8. Finish with doctor and release binary
-설치가 끝나면 마지막은 개발용 `cargo run`이 아니라 릴리즈 빌드와 빌드 산출물 실행 경로 안내다.
+### 8. Finish with doctor and install UX
+설치가 끝나면 마지막은 개발용 `cargo run`이나 `./target/release/rcc` handoff가 아니라 제품 실행 UX 안내다. Rust setup이 readiness를 확인한 뒤, binary 배치와 PATH onboarding용 shell installer script를 안내한다.
 
 ```bash
-cargo build --release -p rcc
-./target/release/rcc
+rcc
+rcc service install
+rcc service start
 ```
 
 ## Final Step Sequence
@@ -179,12 +180,13 @@ cargo build --release -p rcc
 ### Step 12. Doctor verification
 > 설치 검증을 진행할게요.
 
-### Step 13. Release build handoff
-> 설치와 검증이 끝났어요. 이제 실행 파일을 빌드합니다.
+### Step 13. Install UX handoff
+> 설치와 검증이 끝났어요. 이제 기본 실행은 `rcc`, 상시 실행은 `rcc service ...` 기준으로 안내합니다.
 >
 > ```bash
-> cargo build --release -p rcc
-> ./target/release/rcc
+> rcc
+> rcc service install
+> rcc service start
 > ```
 
 ## Common mistakes
@@ -193,12 +195,13 @@ cargo build --release -p rcc
 - 브라우저 자동화를 주 경로로 가정하기
 - config token 분기를 맨 앞에 두지 않기
 - artifact readiness 확인 없이 바로 resume 하기
-- 마지막 실행을 `cargo run -p rcc`로 안내하기
+- 마지막 실행을 `cargo run -p rcc`나 `./target/release/rcc`로 안내하기
 
 ## Quick Reference
 - 최우선 분기점: `app configuration token` 유무
 - 안정적인 기본 경로: semi-automatic ping-pong flow
 - member ID 확인: 프로필 → 세 점 → `Copy member ID`
 - App-Level Token scope: `connections:write`
-- 마지막 실행: `cargo build --release -p rcc` 후 `./target/release/rcc`
+- 마지막 실행: `rcc`
+- 상시 실행: `rcc service install` 후 `rcc service start`
 - 목표 메시지: Slack 콘솔 단계만 잠깐 따라오면 Claude가 나머지 설치를 끝까지 마무리해 줌

@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf, sync::Arc};
 
-use rcc::{build_app, find_env_file, parse_cli_command, resolve_workspace_root, run_doctor, AppConfig, CliCommand};
+use rcc::{build_app, find_env_file, parse_cli_command, resolve_workspace_root, run_doctor, AppConfig, CliCommand, ServiceCommand};
 use rcc::setup::run_setup;
 use transport_slack::{serve_socket_mode, SlackSessionOrchestrator};
 
@@ -34,6 +34,16 @@ async fn main() {
                 eprintln!("failed to complete setup: {error}");
                 std::process::exit(1);
             }
+            return;
+        }
+        CliCommand::Service(command) => {
+            let message = match command {
+                ServiceCommand::Install => "rcc service install is not implemented yet. For now, run `rcc` directly after setup.",
+                ServiceCommand::Start => "rcc service start is not implemented yet. For now, run `rcc` directly after setup.",
+                ServiceCommand::Stop => "rcc service stop is not implemented yet.",
+                ServiceCommand::Status => "rcc service status is not implemented yet.",
+            };
+            println!("{message}");
             return;
         }
         CliCommand::Run => {}

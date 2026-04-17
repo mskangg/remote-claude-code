@@ -351,18 +351,38 @@ pub fn run_doctor(config: &AppConfig, workspace_root: &Path) -> Vec<DoctorCheck>
 
 pub mod setup;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceCommand {
+    Install,
+    Start,
+    Stop,
+    Status,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
     Run,
     Doctor,
     Setup,
+    Service(ServiceCommand),
 }
 
 pub fn parse_cli_command(args: &[String]) -> CliCommand {
     match args.get(1).map(|value| value.as_str()) {
         Some("doctor") => CliCommand::Doctor,
         Some("setup") => CliCommand::Setup,
+        Some("service") => CliCommand::Service(parse_service_command(args)),
         _ => CliCommand::Run,
+    }
+}
+
+pub fn parse_service_command(args: &[String]) -> ServiceCommand {
+    match args.get(2).map(|value| value.as_str()) {
+        Some("install") => ServiceCommand::Install,
+        Some("start") => ServiceCommand::Start,
+        Some("stop") => ServiceCommand::Stop,
+        Some("status") | None => ServiceCommand::Status,
+        Some(_) => ServiceCommand::Status,
     }
 }
 
@@ -390,6 +410,18 @@ mod tests {
     fn parse_cli_command_detects_setup() {
         let args = vec!["rcc".to_string(), "setup".to_string()];
         assert_eq!(parse_cli_command(&args), CliCommand::Setup);
+    }
+
+    #[test]
+    fn parse_cli_command_detects_service_start() {
+        let args = vec!["rcc".to_string(), "service".to_string(), "start".to_string()];
+        assert_eq!(parse_cli_command(&args), CliCommand::Service(ServiceCommand::Start));
+    }
+
+    #[test]
+    fn parse_service_command_defaults_to_status() {
+        let args = vec!["rcc".to_string(), "service".to_string()];
+        assert_eq!(parse_service_command(&args), ServiceCommand::Status);
     }
 
     #[test]
@@ -554,6 +586,161 @@ mod tests {
         let output = setup::format_setup_doctor_failures(&checks);
         assert!(output.contains("tmux를 설치"));
         assert!(output.contains("channel-projects.json"));
+    }
+
+    #[test]
+    fn setup_completion_message_references_installed_command_and_service_flow() {
+        let message = setup::format_setup_completion_message(
+            std::path::Path::new("/Users/demo/.local/bin/rcc"),
+            std::path::Path::new("/Users/demo/.zshrc"),
+            std::path::Path::new("/tmp/workspace/.local/install-rcc.sh"),
+        );
+        assert!(message.contains("rcc"));
+        assert!(message.contains("/Users/demo/.local/bin/rcc"));
+        assert!(message.contains("/Users/demo/.zshrc"));
+        assert!(message.contains("sh /tmp/workspace/.local/install-rcc.sh"));
+        assert!(message.contains("rcc service install && rcc service start"));
+        assert!(!message.contains("cargo run -p rcc"));
+    }
+
+    #[test]
+    fn install_path_defaults_to_user_local_bin() {
+        let previous = env::var_os("HOME");
+        unsafe { env::set_var("HOME", "/Users/demo") };
+
+        let path = setup::default_install_path().expect("install path");
+
+        match previous {
+            Some(value) => unsafe { env::set_var("HOME", value) },
+            None => unsafe { env::remove_var("HOME") },
+        }
+
+        assert_eq!(path, std::path::PathBuf::from("/Users/demo/.local/bin/rcc"));
+    }
+
+    #[test]
+    fn install_profile_path_prefers_zshrc_for_zsh_shell() {
+        let previous_home = env::var_os("HOME");
+        let previous_shell = env::var_os("SHELL");
+        unsafe {
+            env::set_var("HOME", "/Users/demo");
+            env::set_var("SHELL", "/bin/zsh");
+        }
+
+        let path = setup::default_shell_profile_path().expect("shell profile");
+
+        match previous_home {
+            Some(value) => unsafe { env::set_var("HOME", value) },
+            None => unsafe { env::remove_var("HOME") },
+        }
+        match previous_shell {
+            Some(value) => unsafe { env::set_var("SHELL", value) },
+            None => unsafe { env::remove_var("SHELL") },
+        }
+
+        assert_eq!(path, std::path::PathBuf::from("/Users/demo/.zshrc"));
+    }
+
+    #[test]
+    fn install_script_contains_path_export_and_binary_copy() {
+        let script = setup::build_shell_install_script(
+            std::path::Path::new("/tmp/build/rcc"),
+            std::path::Path::new("/Users/demo/.local/bin/rcc"),
+            std::path::Path::new("/Users/demo/.zshrc"),
+        );
+
+        assert!(script.contains("install -m 755"));
+        assert!(script.contains("/tmp/build/rcc"));
+        assert!(script.contains("/Users/demo/.local/bin/rcc"));
+        assert!(script.contains("export PATH=\"$HOME/.local/bin:$PATH\""));
+        assert!(script.contains("/Users/demo/.zshrc"));
+    }
+
+    #[test]
+    fn installer_script_path_uses_workspace_local_file() {
+        let path = setup::pending_install_script_path(std::path::Path::new("/tmp/workspace"));
+        assert_eq!(path, std::path::PathBuf::from("/tmp/workspace/.local/install-rcc.sh"));
+    }
+
+    #[test]
+    fn setup_completion_message_points_to_installer_script_file() {
+        let message = setup::format_setup_completion_message(
+            std::path::Path::new("/Users/demo/.local/bin/rcc"),
+            std::path::Path::new("/Users/demo/.zshrc"),
+            std::path::Path::new("/tmp/workspace/.local/install-rcc.sh"),
+        );
+        assert!(message.contains("/tmp/workspace/.local/install-rcc.sh"));
+        assert!(message.contains("sh /tmp/workspace/.local/install-rcc.sh"));
+    }
+
+    #[tokio::test]
+    async fn execute_setup_runs_installer_script_when_user_confirms() {
+        let _guard = slack_env_lock();
+        let previous_home = env::var_os("HOME");
+        let previous_shell = env::var_os("SHELL");
+        let previous_path = env::var_os("PATH");
+
+        let temp_dir = tempdir().expect("create temp dir");
+        let workspace_root = temp_dir.path();
+        unsafe {
+            env::set_var("HOME", workspace_root);
+            env::set_var("SHELL", "/bin/zsh");
+            env::set_var("PATH", "/usr/bin:/bin");
+        }
+        fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
+        fs::write(workspace_root.join("slack/app-manifest.json"), "{}\n").expect("write manifest");
+        fs::create_dir_all(workspace_root.join(".claude")).expect("create claude dir");
+        let bin_dir = workspace_root.join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::write(bin_dir.join("tmux"), "#!/bin/sh\nexit 0\n").expect("write fake tmux");
+        let mut perms = fs::metadata(bin_dir.join("tmux")).expect("tmux metadata").permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perms.set_mode(0o755);
+            fs::set_permissions(bin_dir.join("tmux"), perms).expect("chmod fake tmux");
+        }
+        unsafe { env::set_var("PATH", format!("{}:/usr/bin:/bin", bin_dir.display())) };
+
+        let config = AppConfig {
+            state_db_path: workspace_root.join(".local/state.db"),
+            channel_project_store_path: workspace_root.join("data/channel-projects.json"),
+            runtime_working_directory: workspace_root.display().to_string(),
+            runtime_launch_command: "claude".to_string(),
+            runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
+            runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+        };
+
+        let input = setup::SetupInput {
+            slack_bot_token: Some("xoxb-bot".into()),
+            slack_signing_secret: Some("signing-secret".into()),
+            slack_app_token: Some("xapp-app".into()),
+            slack_allowed_user_id: Some("U123".into()),
+            slack_app_configuration_token: None,
+            channel_id: Some("C123".into()),
+            project_root: Some(workspace_root.display().to_string()),
+            project_label: Some("demo-project".into()),
+        };
+
+        let mut prompter = setup::FakePrompter::new(vec![setup::FakeAnswer::Prompt("n".into())]);
+        let result = setup::execute_setup(&config, workspace_root, input, &mut prompter).await;
+
+        match previous_home {
+            Some(value) => unsafe { env::set_var("HOME", value) },
+            None => unsafe { env::remove_var("HOME") },
+        }
+        match previous_shell {
+            Some(value) => unsafe { env::set_var("SHELL", value) },
+            None => unsafe { env::remove_var("SHELL") },
+        }
+        match previous_path {
+            Some(value) => unsafe { env::set_var("PATH", value) },
+            None => unsafe { env::remove_var("PATH") },
+        }
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(prompter.output().contains("설치 스크립트를 지금 실행할까요?"));
+        assert!(prompter.output().contains("Run this later with: sh"));
     }
 
     #[test]
