@@ -34,22 +34,8 @@ description: Use when setting up Remote Claude Code, connecting Slack, creating 
 - `--from-slack-artifact`
 - `RCC_SETUP_*`
 
-### 3. Treat app configuration token as the top branching point
-Slack 앱 자동 생성을 가장 먼저 판단하는 기준은 **app configuration token**이다.
-
-- 있으면: `apps.manifest.create`로 앱 생성 자동 시도
-- 없으면: token 발급 단계를 안내
-- 발급도 못 하면: 검증된 수동 manifest 경로로 fallback
-
-config token 발급 안내는 이렇게 한다.
-- Slack 앱 관리 화면으로 이동
-- `Generate Token`
-- 원하는 workspace 선택
-- 생성된 token 복사
-- 그 값을 사용자에게 한 번만 받기
-
-### 4. Use manual Slack console flow as the primary stable fallback
-브라우저 전면 자동화는 기본 경로가 아니다. 실제로 검증된 성공 경로는 아래였다.
+### 3. Use manual Slack console flow as the primary stable path
+브라우저 전면 자동화나 manifest API-first 경로는 기본 경로가 아니다. 실제로 검증된 성공 경로는 아래였다.
 
 - 링크: `https://api.slack.com/apps?new_app=1`
 - `Create app from manifest`
@@ -128,31 +114,7 @@ cargo build --release -p rcc
 ### Step 2. Baseline resolution
 > 이미 알고 있는 값은 먼저 채워둘게요.
 
-### Step 3. Config token issuance
-> 먼저 Slack app configuration token부터 만들게요.
-> 이 토큰은 **Slack 앱을 자동 생성할 때 쓰는 전용 토큰**입니다.
-> 발급된 뒤에는 제가 Slack 앱 생성을 먼저 자동으로 시도할 수 있어요.
->
-> 링크: `https://api.slack.com/apps`
->
-> 1. Slack 앱 관리 화면으로 이동
-> 2. `Generate Token` 클릭
-> 3. 사용할 workspace 선택
-> 4. 생성된 token 복사
-> 5. 그 값을 저에게 붙여넣어 주세요
-
-설명 보강:
-> `Generate Token`을 누른 뒤 바로 끝나는 게 아니라, 원하는 workspace를 선택한 다음 토큰을 만들어야 합니다.
-> 이 토큰은 12시간 동안만 유효하므로 setup 초반에 바로 발급받는 흐름을 기본으로 사용합니다.
-
-### Step 4. Manifest API create attempt
-성공 시:
-> Slack 앱 생성은 자동으로 끝났어요. 이제 설치 승인과 토큰 회수만 하면 됩니다.
-
-실패 시:
-> Slack 앱 자동 생성은 실패했어요. 이제 검증된 수동 manifest 생성 단계로 진행할게요.
-
-### Step 5. Manual manifest step
+### Step 3. Manual manifest step
 > 지금은 Slack 콘솔 단계예요.
 > 1. 아래 링크를 열어 주세요.
 > 2. `Create app from manifest`를 선택해 주세요.

@@ -69,17 +69,15 @@ remote-claude-code 셋업해줘
 
 setup wizard는 다음 순서로 진행됩니다.
 - 로컬 환경 확인
-- 먼저 **Slack 앱을 자동 생성할 때 쓰는 전용 토큰**인 `app configuration token` 발급 단계 안내
-  - 링크: `https://api.slack.com/apps`
-- token이 준비되면 `apps.manifest.create`로 Slack 앱 생성 자동 시도
-- API 생성이 실패하면 검증된 semi-automatic Slack 콘솔 경로로 fallback
-- Slack 콘솔 단계에서는 manifest를 아래 중 편한 방식으로 제공합니다.
-  - 보기용: `https://github.com/mskangg/remote-claude-code/blob/main/slack/app-manifest.json`
-  - raw: `https://raw.githubusercontent.com/mskangg/remote-claude-code/main/slack/app-manifest.json`
+- Slack 콘솔 단계 안내
+  - 링크: `https://api.slack.com/apps?new_app=1`
+  - manifest 제공 (보기용 + raw)
 - 필요한 값을 한 단계씩 수집
 - artifact 기반 resume
 - `doctor`
 - release binary 준비
+
+`apps.manifest.create` 기반 자동 생성 경로는 코드에 남아 있지만, 현재 공개 기본 경로로는 사용하지 않습니다.
 
 ### 4. 실행 파일 준비 및 실행
 
@@ -92,21 +90,9 @@ cargo build --release -p rcc
 
 플러그인 없이 직접 진행하려면 아래 경로를 사용할 수 있습니다.
 
-#### API-first setup
+#### Guided semi-automatic setup
 
-먼저 **Slack app configuration token**을 발급받고, 그 다음 아래처럼 setup에 넣는 흐름이 기본입니다.
-이 토큰은 12시간 동안만 유효합니다.
-
-```bash
-cargo run -p rcc -- setup --slack-config-token <xoxa-config-token>
-cargo run -p rcc -- doctor
-cargo build --release -p rcc
-./target/release/rcc
-```
-
-#### Guided fallback setup
-
-app configuration token이 없으면, setup이 Slack 콘솔 단계와 복사해야 할 값을 한 단계씩 안내합니다.
+현재 공개 기준으로 가장 신뢰할 수 있는 설치 경로는 아래입니다.
 
 ```bash
 cargo run -p rcc -- setup
@@ -117,7 +103,11 @@ cargo build --release -p rcc
 ./target/release/rcc
 ```
 
-`setup`은 automation-first 설치 마법사입니다. 먼저 기존 값을 재사용하고, app configuration token이 있으면 Slack app creation을 manifest API로 시도합니다. API 생성이 불가능하거나 실패하면, 검증된 semi-automatic Slack 콘솔 경로로 자연스럽게 fallback한 뒤 artifact 기반 resume, `doctor`, release build까지 이어집니다.
+`setup`은 automation-first 설치 마법사이지만, 현재 공개 기본 경로는 검증된 semi-automatic Slack 콘솔 루트입니다. Claude가 단계별로 링크와 manifest를 제공하고, 값은 하나씩 받아 artifact 기반으로 resume, `doctor`, release build까지 이어집니다.
+
+#### Experimental manifest API path
+
+Slack app configuration token이 있으면 `apps.manifest.create` 경로를 실험적으로 시도할 수 있습니다. 다만 현재는 응답과 동작이 안정적이지 않아 공개 기본 경로로 권장하지 않습니다.
 
 앱 실행 뒤 Slack에서 `/cc`를 실행하면 됩니다.
 

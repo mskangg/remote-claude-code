@@ -16,15 +16,14 @@ cargo run -p rcc -- setup
 
 기본 흐름:
 - 기존 값 / file / env override 먼저 확인
-- 먼저 Slack app configuration token 발급 단계부터 안내
-- token이 준비되면 `apps.manifest.create`를 먼저 시도
-- 성공하면 설치 승인/토큰 회수 단계만 남김
-- 실패하면 검증된 manual-assisted Slack 단계로 fallback
+- 검증된 manual-assisted Slack 단계로 안내
 - 생성 결과를 setup 입력/artifact로 흡수
 - `.env.local` 작성
 - channel mapping 작성
 - `doctor` 실행
 - release binary 실행 경로 안내
+
+manifest API 경로는 코드에 남아 있지만, 현재는 공개 기본 경로로 사용하지 않습니다.
 
 그 다음 실행 흐름은 아래처럼 고정됩니다.
 
@@ -36,24 +35,7 @@ cargo build --release -p rcc
 
 ## Automation-friendly setup
 
-### API-first path
-
-`setup`의 기본 경로는 먼저 **Slack app configuration token**을 발급받고, 그 뒤 `apps.manifest.create`를 시도하는 것입니다.
-이 토큰은 Slack 앱을 자동 생성할 때 쓰는 전용 토큰이며, 12시간 동안만 유효합니다.
-
-링크: `https://api.slack.com/apps`
-
-1. Slack 앱 관리 화면으로 이동
-2. `Generate Token` 클릭
-3. 사용할 workspace 선택
-4. 생성된 app configuration token 복사
-5. 그 값을 setup에 넣기
-
-즉 `Generate Token`을 누른 뒤 바로 끝나는 게 아니라, 원하는 workspace를 선택한 다음 token을 만들어야 합니다.
-이 토큰이 준비되면 setup이 `apps.manifest.create`를 먼저 시도합니다.
-성공하면 artifact에 `signingSecret`, `appId`, `oauthAuthorizeUrl`를 반영하고, 이후에는 설치 승인과 토큰 회수 단계만 진행하면 됩니다.
-
-### Fallback semi-automatic path
+### Recommended path: semi-automatic setup
 
 Slack artifact 기본 경로:
 
@@ -99,7 +81,7 @@ non-interactive 규칙:
 이 프로젝트의 사용자는 Claude Code에 익숙하다는 전제를 둡니다. 완전한 무인 설치가 아니더라도, Claude가 아래 순서로 setup을 주도해야 합니다.
 
 ```text
-이 저장소의 Slack 설정을 진행해줘. 먼저 app configuration token이 있는지 확인하고, 있으면 `apps.manifest.create`를 먼저 시도해줘. token이 없거나 API 생성이 실패하면 `slack/app-manifest.json` 기준으로 검증된 manual-assisted Slack 단계를 진행해줘. Slack 단계에서 새로 얻은 값은 `docs/slack-setup-artifact-patch.example.json` 형태의 patch JSON으로 정리해서 `cargo run -p rcc -- setup --merge-slack-artifact <patch.json> --json`로 반영해줘. 마지막에는 `cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive`, `cargo run -p rcc -- doctor`, `cargo build --release -p rcc`, `./target/release/rcc`까지 이어서 진행해줘.
+이 저장소의 Slack 설정을 진행해줘. `slack/app-manifest.json` 기준으로 검증된 manual-assisted Slack 단계를 진행해주고, 필요한 값은 하나씩 받아서 `docs/slack-setup-artifact-patch.example.json` 형태의 patch JSON으로 정리한 뒤 `cargo run -p rcc -- setup --merge-slack-artifact <patch.json> --json`로 반영해줘. 마지막에는 `cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive`, `cargo run -p rcc -- doctor`, `cargo build --release -p rcc`, `./target/release/rcc`까지 이어서 진행해줘.
 ```
 
 ## 필요한 값
