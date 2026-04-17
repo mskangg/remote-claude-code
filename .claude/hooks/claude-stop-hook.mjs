@@ -156,23 +156,11 @@ export const buildProjectSessionLogPath = (cwd, sessionId) => {
     return join(process.env.HOME ?? '', '.claude', 'projects', encodedProjectPath, `${sessionId}.jsonl`);
 };
 const resolveProjectRootForTranscript = () => {
-    const configuredProjectRoot = process.env.SLACK_REMOTE_PROJECT_ROOT?.trim();
-    if (configuredProjectRoot) {
-        return configuredProjectRoot;
-    }
-    const currentDirectory = process.cwd();
-    const worktreeMarker = join('.claude', 'worktrees');
-    const markerIndex = currentDirectory.indexOf(worktreeMarker);
-    if (markerIndex === -1) {
-        return currentDirectory;
-    }
-    return currentDirectory.slice(0, markerIndex - 1);
+    return process.env.SLACK_REMOTE_PROJECT_ROOT?.trim() || null;
 };
 const buildTranscriptPathCandidates = (sessionId) => {
     const candidates = [
-        process.env.SLACK_REMOTE_PROJECT_ROOT?.trim() || null,
         resolveProjectRootForTranscript(),
-        process.cwd(),
     ].filter((value, index, array) => Boolean(value) && array.indexOf(value) === index);
     return candidates.map((projectRoot) => buildProjectSessionLogPath(projectRoot, sessionId));
 };

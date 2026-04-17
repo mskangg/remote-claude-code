@@ -117,3 +117,8 @@ test('readStableAssistantEntryForStop waits for a new assistant turn beyond the 
     assert.equal(entry?.uuid, 'assistant-uuid-2');
     assert.equal(entry?.text, '두 번째 응답');
 });
+
+test('hook runtime should not rely on cwd-based project root fallback', async () => {
+    const source = await readFile(new URL('./claude-stop-hook.mjs', import.meta.url), 'utf8');
+    assert.equal(source.includes('process.cwd()'), false);
+});

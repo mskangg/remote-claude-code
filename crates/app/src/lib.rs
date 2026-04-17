@@ -121,6 +121,9 @@ pub fn resolve_workspace_root() -> PathBuf {
 }
 
 pub fn find_env_file(workspace_root: &Path) -> Option<PathBuf> {
+    if let Some(configured) = env::var_os("RCC_ENV_FILE").map(PathBuf::from) {
+        return Some(configured);
+    }
     let env_file = workspace_root.join(".env.local");
     env_file.exists().then_some(env_file)
 }
@@ -710,6 +713,8 @@ mod tests {
         assert!(script.contains("cd \"/Users/demo/work/project\""));
         assert!(script.contains("export RCC_PROJECT_ROOT=\"/Users/demo/work/project\""));
         assert!(script.contains("export RCC_ENV_FILE=\"/Users/demo/work/project/.env.local\""));
+        assert!(script.contains("export RCC_HOOK_SETTINGS_PATH=\"/Users/demo/.local/share/remote-claude-code/claude-stop-hooks.json\""));
+        assert!(script.contains("export RCC_HOOK_SCRIPT_PATH=\"/Users/demo/.local/share/remote-claude-code/hooks/claude-stop-hook.mjs\""));
         assert!(script.contains("exec \"/Users/demo/.local/bin/rcc.bin\" \"$@\""));
     }
 
@@ -1689,22 +1694,56 @@ mod tests {
     }
 
     #[test]
-    fn config_defaults_to_workspace_local_paths() {
-        let previous = env::var_os("RCC_STATE_DB_PATH");
-        unsafe { env::remove_var("RCC_STATE_DB_PATH") };
+    fn config_prefers_explicit_installed_asset_paths() {
+        let previous_state = env::var_os("RCC_STATE_DB_PATH");
+        let previous_projects = env::var_os("RCC_CHANNEL_PROJECTS_PATH");
+        let previous_root = env::var_os("RCC_PROJECT_ROOT");
+        let previous_settings = env::var_os("RCC_HOOK_SETTINGS_PATH");
+        let previous_events = env::var_os("RCC_HOOK_EVENTS_DIR");
+        let previous_env_file = env::var_os("RCC_ENV_FILE");
+        unsafe {
+            env::set_var("RCC_STATE_DB_PATH", "/opt/rcc/state.db");
+            env::set_var("RCC_CHANNEL_PROJECTS_PATH", "/opt/rcc/channel-projects.json");
+            env::set_var("RCC_PROJECT_ROOT", "/work/project");
+            env::set_var("RCC_HOOK_SETTINGS_PATH", "/opt/rcc/claude-stop-hooks.json");
+            env::set_var("RCC_HOOK_EVENTS_DIR", "/opt/rcc/hooks");
+            env::set_var("RCC_ENV_FILE", "/work/project/.env.local");
+        }
 
         let config = AppConfig::from_env();
 
-        assert!(config.state_db_path.ends_with(".local/state.db"));
-        assert!(config.channel_project_store_path.ends_with("data/channel-projects.json"));
-        assert!(!config.runtime_working_directory.is_empty());
-        assert!(config.runtime_launch_command.contains("--settings"));
-        assert!(config.runtime_hook_events_directory.ends_with(".local/hooks"));
-        assert!(config.runtime_hook_settings_path.ends_with(".claude/claude-stop-hooks.json"));
+        assert_eq!(config.state_db_path, std::path::PathBuf::from("/opt/rcc/state.db"));
+        assert_eq!(config.channel_project_store_path, std::path::PathBuf::from("/opt/rcc/channel-projects.json"));
+        assert_eq!(config.runtime_working_directory, "/work/project");
+        assert!(config.runtime_launch_command.contains("/opt/rcc/claude-stop-hooks.json"));
+        assert_eq!(config.runtime_hook_events_directory, "/opt/rcc/hooks");
+        assert_eq!(config.runtime_hook_settings_path, std::path::PathBuf::from("/opt/rcc/claude-stop-hooks.json"));
+        let env_file = find_env_file(std::path::Path::new("/work/project"));
+        assert_eq!(env_file, Some(std::path::PathBuf::from("/work/project/.env.local")));
 
-        match previous {
+        match previous_state {
             Some(value) => unsafe { env::set_var("RCC_STATE_DB_PATH", value) },
             None => unsafe { env::remove_var("RCC_STATE_DB_PATH") },
+        }
+        match previous_projects {
+            Some(value) => unsafe { env::set_var("RCC_CHANNEL_PROJECTS_PATH", value) },
+            None => unsafe { env::remove_var("RCC_CHANNEL_PROJECTS_PATH") },
+        }
+        match previous_root {
+            Some(value) => unsafe { env::set_var("RCC_PROJECT_ROOT", value) },
+            None => unsafe { env::remove_var("RCC_PROJECT_ROOT") },
+        }
+        match previous_settings {
+            Some(value) => unsafe { env::set_var("RCC_HOOK_SETTINGS_PATH", value) },
+            None => unsafe { env::remove_var("RCC_HOOK_SETTINGS_PATH") },
+        }
+        match previous_events {
+            Some(value) => unsafe { env::set_var("RCC_HOOK_EVENTS_DIR", value) },
+            None => unsafe { env::remove_var("RCC_HOOK_EVENTS_DIR") },
+        }
+        match previous_env_file {
+            Some(value) => unsafe { env::set_var("RCC_ENV_FILE", value) },
+            None => unsafe { env::remove_var("RCC_ENV_FILE") },
         }
     }
 
@@ -2014,7 +2053,8 @@ mod tests {
         let hooks = fs::read_to_string(&hooks_path).expect("read bundled hook settings");
 
         assert!(!hooks.contains("--env-file=.env.local"));
-        assert!(hooks.contains("claude-stop-hook.mjs"));
+        assert!(!hooks.contains("./.claude/hooks/claude-stop-hook.mjs"));
+        assert!(hooks.contains("RCC_HOOK_SCRIPT_PATH"));
     }
 
     #[test]

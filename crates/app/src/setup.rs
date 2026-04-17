@@ -834,15 +834,34 @@ pub fn build_shell_install_script(
 ) -> String {
     let launcher_path = install_path.display().to_string();
     let binary_target = format!("{}.bin", launcher_path);
+    let install_root = install_path
+        .parent()
+        .and_then(|path| path.parent())
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let asset_root = install_root.join("share").join("remote-claude-code");
+    let hook_script_target = asset_root.join("hooks").join("claude-stop-hook.mjs");
+    let hook_store_target = asset_root.join("hooks").join("hook-event-store.mjs");
+    let hook_settings_target = asset_root.join("claude-stop-hooks.json");
+    let hook_settings_path = hook_settings_target.display().to_string();
+    let hook_script_path = hook_script_target.display().to_string();
     format!(
-        "#!/usr/bin/env sh\nset -eu\nmkdir -p \"{}\"\ninstall -m 755 \"{}\" \"{}\"\ncat > \"{}\" <<'EOF'\n#!/usr/bin/env sh\nset -eu\ncd \"{}\"\nexport RCC_PROJECT_ROOT=\"{}\"\nexport RCC_ENV_FILE=\"{}/.env.local\"\nexec \"{}\" \"$@\"\nEOF\nchmod 755 \"{}\"\nif ! grep -Fq 'export PATH=\"$HOME/.local/bin:$PATH\"' \"{}\" 2>/dev/null; then\n  printf '\nexport PATH=\"$HOME/.local/bin:$PATH\"\n' >> \"{}\"\nfi\nprintf 'Installed rcc launcher to {}\\n'\nprintf 'Open a new shell or run: source {}\\n'\n",
+        "#!/usr/bin/env sh\nset -eu\nmkdir -p \"{}\" \"{}\"\ninstall -m 755 \"{}\" \"{}\"\ninstall -m 755 \"{}\" \"{}\"\ninstall -m 755 \"{}\" \"{}\"\ncat > \"{}\" <<'EOF'\n{{\n  \"hooks\": {{\n    \"Stop\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}}]}}],\n    \"StopFailure\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}}]}}],\n    \"Notification\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}}]}}],\n    \"PreToolUse\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}}]}}],\n    \"PostToolUse\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}}]}}]\n  }}\n}}\nEOF\ncat > \"{}\" <<'EOF'\n#!/usr/bin/env sh\nset -eu\ncd \"{}\"\nexport RCC_PROJECT_ROOT=\"{}\"\nexport RCC_ENV_FILE=\"{}/.env.local\"\nexport RCC_HOOK_SETTINGS_PATH=\"{}\"\nexport RCC_HOOK_SCRIPT_PATH=\"{}\"\nexec \"{}\" \"$@\"\nEOF\nchmod 755 \"{}\"\nif ! grep -Fq 'export PATH=\"$HOME/.local/bin:$PATH\"' \"{}\" 2>/dev/null; then\n  printf '\nexport PATH=\"$HOME/.local/bin:$PATH\"\n' >> \"{}\"\nfi\nprintf 'Installed rcc launcher to {}\\n'\nprintf 'Open a new shell or run: source {}\\n'\n",
         install_path.parent().map(|path| path.display().to_string()).unwrap_or_else(|| ".".to_string()),
+        asset_root.join("hooks").display(),
         source_binary_path.display(),
         binary_target,
+        workspace_root.join(".claude/hooks/claude-stop-hook.mjs").display(),
+        hook_script_target.display(),
+        workspace_root.join(".claude/hooks/hook-event-store.mjs").display(),
+        hook_store_target.display(),
+        hook_settings_target.display(),
         launcher_path,
         workspace_root.display(),
         workspace_root.display(),
         workspace_root.display(),
+        hook_settings_path,
+        hook_script_path,
         binary_target,
         launcher_path,
         profile_path.display(),
