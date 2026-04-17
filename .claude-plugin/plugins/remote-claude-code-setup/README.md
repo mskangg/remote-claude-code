@@ -15,7 +15,7 @@ A Slack app configuration token is the token used to create the Slack app automa
 
 ## Best path
 
-1. Provide an app configuration token if you have one
+1. Generate a Slack app configuration token first
 2. Let setup try manifest API creation first
 3. If Slack still needs manual work, follow the guided Slack console steps
 4. Resume from the workspace artifact

@@ -69,9 +69,9 @@ remote-claude-code 셋업해줘
 
 setup wizard는 다음 순서로 진행됩니다.
 - 로컬 환경 확인
-- **Slack 앱을 자동 생성할 때 쓰는 전용 토큰**인 `app configuration token` 확인
-- 가능하면 `apps.manifest.create`로 Slack 앱 생성 자동 시도
-- token이 없거나 API 생성이 실패하면 검증된 semi-automatic Slack 콘솔 경로로 fallback
+- 먼저 **Slack 앱을 자동 생성할 때 쓰는 전용 토큰**인 `app configuration token` 발급 단계 안내
+- token이 준비되면 `apps.manifest.create`로 Slack 앱 생성 자동 시도
+- API 생성이 실패하면 검증된 semi-automatic Slack 콘솔 경로로 fallback
 - 필요한 값을 한 단계씩 수집
 - artifact 기반 resume
 - `doctor`
@@ -90,7 +90,8 @@ cargo build --release -p rcc
 
 #### API-first setup
 
-Slack 앱을 자동 생성할 때 쓰는 **app configuration token**이 이미 있으면 아래 경로를 사용할 수 있습니다.
+먼저 **Slack app configuration token**을 발급받고, 그 다음 아래처럼 setup에 넣는 흐름이 기본입니다.
+이 토큰은 12시간 동안만 유효합니다.
 
 ```bash
 cargo run -p rcc -- setup --slack-config-token <xoxa-config-token>
