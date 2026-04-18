@@ -89,11 +89,14 @@ rcc
 
 기본 설치 대상은 사용자 로컬 경로 기준 `~/.local/bin/rcc`입니다. setup 마지막에는 이 경로와 shell profile 업데이트를 위한 installer script를 함께 안내합니다.
 
-상시 실행 UX는 제품 CLI 기준으로 맞춥니다.
+백그라운드 상시 실행은 아래 명령으로 관리합니다.
 
 ```bash
-rcc service install
-rcc service start
+rcc service install    # launchd 서비스 등록 + 시작 (부팅 시 자동 실행)
+rcc service start      # 서비스 시작
+rcc service stop       # 서비스 중지
+rcc service status     # 서비스 상태 확인
+rcc service uninstall  # 서비스 해제 + 바이너리 제거
 ```
 
 ### Direct CLI path
@@ -110,7 +113,8 @@ cargo run -p rcc -- setup --merge-slack-artifact docs/slack-setup-artifact-patch
 cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive
 cargo run -p rcc -- doctor
 cargo build --release -p rcc
-./target/release/rcc
+sh .local/install-rcc.sh
+rcc service install && rcc service start
 ```
 
 `setup`은 automation-first 설치 마법사이지만, 현재 공개 기본 경로는 검증된 semi-automatic Slack 콘솔 루트입니다. Claude가 단계별로 링크와 manifest를 제공하고, 값은 하나씩 받아 artifact 기반으로 resume, `doctor`, release build까지 이어집니다.
