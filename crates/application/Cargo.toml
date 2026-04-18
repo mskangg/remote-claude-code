@@ -11,6 +11,7 @@ core-model = { path = "../core-model" }
 core-service = { path = "../core-service" }
 slack-morphism = { version = "2.19.0", features = ["hyper"] }
 thiserror.workspace = true
+tracing.workspace = true
 transport-slack = { path = "../transport-slack" }
 url.workspace = true
 

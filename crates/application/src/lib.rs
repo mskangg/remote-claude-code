@@ -411,11 +411,21 @@ where
                     .await?;
             }
             (SessionMsg::RuntimeCompleted { summary, .. }, SessionState::Idle) => {
-                self.publisher.delete_message(&status).await?;
-                self.publisher.post_final_reply(&target, summary).await?;
+                // Delete the status message before posting the final reply so that
+                // a failed post_final_reply (e.g. empty summary from /clear) does
+                // not leave a stale Working... message in the thread.
+                if let Err(error) = self.publisher.delete_message(&status).await {
+                    tracing::warn!(error = %error, "failed to delete working status on completion");
+                }
+                // Skip posting an empty reply (e.g. /clear produces no assistant text).
+                if !summary.trim().is_empty() {
+                    self.publisher.post_final_reply(&target, summary).await?;
+                }
             }
             (SessionMsg::RuntimeFailed { error, .. }, SessionState::Failed { .. }) => {
-                self.publisher.delete_message(&status).await?;
+                if let Err(del_err) = self.publisher.delete_message(&status).await {
+                    tracing::warn!(error = %del_err, "failed to delete working status on failure");
+                }
                 self.publisher
                     .post_final_reply(&target, &format!("Session failed: {error}"))
                     .await?;

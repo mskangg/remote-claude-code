@@ -971,6 +971,8 @@ struct RawInteractiveMessage {
 struct RawInteractiveContainer {
     channel_id: Option<String>,
     message_ts: Option<String>,
+    // Present in Slack payloads when the action originates from a threaded message.
+    thread_ts: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1097,13 +1099,27 @@ fn parse_interactive_action(payload: Option<Value>) -> Result<Option<SlackBlockA
         return Ok(None);
     };
 
+    // Priority: message.thread_ts > container.thread_ts > message.ts > container.message_ts.
+    // container.thread_ts is present in Slack payloads when the action originates from a
+    // threaded message, providing a reliable fallback when message.thread_ts is absent.
+    let thread_ts = {
+        let from_message_thread = payload.message.as_ref().and_then(|m| m.thread_ts.clone());
+        let from_container_thread = payload.container.as_ref().and_then(|c| c.thread_ts.clone());
+        let from_message_ts = payload.message.as_ref().and_then(|m| m.ts.clone());
+        let from_container_message = payload.container.and_then(|c| c.message_ts);
+        from_message_thread
+            .or(from_container_thread)
+            .or(from_message_ts)
+            .or(from_container_message)
+    };
+
+    if thread_ts.is_none() {
+        tracing::warn!(action_id = action.action_id, channel_id, "interactive action has no resolvable thread_ts; cannot route to session");
+    }
+
     Ok(Some(SlackBlockActionPayload {
         channel_id,
-        thread_ts: payload
-            .message
-            .as_ref()
-            .and_then(|message| message.thread_ts.clone().or_else(|| message.ts.clone()))
-            .or_else(|| payload.container.and_then(|container| container.message_ts)),
+        thread_ts,
         action_id: action.action_id,
         value: action.value,
     }))
