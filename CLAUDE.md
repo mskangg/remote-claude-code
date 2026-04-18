@@ -17,6 +17,13 @@ Slack 안에서 Claude Code 세션을 안정적으로 원격 제어하는 제품
 - `session-store`: SQLite 영속화 (인프라)
 - `app`: 조립만 한다
 
+의존성 규칙:
+
+- `application`은 `transport-slack`의 adapter 인터페이스를 사용해도 된다.
+- `transport-slack`는 유스케이스를 직접 소유하지 않는다.
+- `runtime-local`과 `session-store`는 인프라다. 제품 정책을 넣지 않는다.
+- `app`은 조립만 한다. 비즈니스 로직을 추가하지 않는다.
+
 ## 개발 / 빌드
 
 - 바이너리 크레이트 이름은 `rcc`: `cargo test -p rcc`, `cargo build -p rcc` (`app`으로 하면 오류)
