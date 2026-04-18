@@ -36,7 +36,7 @@ pub fn default_log_path() -> Result<PathBuf> {
         .join("rcc.log"))
 }
 
-pub fn build_plist(rcc_path: &Path, log_path: &Path) -> String {
+pub fn build_plist(rcc_path: &Path, log_path: &Path, path_env: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -48,6 +48,11 @@ pub fn build_plist(rcc_path: &Path, log_path: &Path) -> String {
     <array>
         <string>{rcc}</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path}</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -61,6 +66,7 @@ pub fn build_plist(rcc_path: &Path, log_path: &Path) -> String {
 "#,
         rcc = rcc_path.display(),
         log = log_path.display(),
+        path = path_env,
     )
 }
 
@@ -85,7 +91,8 @@ pub fn install_service() -> Result<()> {
             .with_context(|| format!("create LaunchAgents directory: {}", parent.display()))?;
     }
 
-    let plist = build_plist(&rcc_path, &log_path);
+    let path_env = std::env::var("PATH").unwrap_or_else(|_| "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin".to_string());
+    let plist = build_plist(&rcc_path, &log_path, &path_env);
     fs::write(&plist_path, &plist)
         .with_context(|| format!("write plist: {}", plist_path.display()))?;
 
@@ -235,20 +242,22 @@ mod tests {
     fn build_plist_contains_label_and_paths() {
         let rcc = PathBuf::from("/Users/demo/.local/bin/rcc");
         let log = PathBuf::from("/Users/demo/.local/share/remote-claude-code/rcc.log");
-        let plist = build_plist(&rcc, &log);
+        let plist = build_plist(&rcc, &log, "/opt/homebrew/bin:/usr/bin:/bin");
 
         assert!(plist.contains("com.remote-claude-code.rcc"));
         assert!(plist.contains("/Users/demo/.local/bin/rcc"));
         assert!(plist.contains("/Users/demo/.local/share/remote-claude-code/rcc.log"));
         assert!(plist.contains("<key>KeepAlive</key>"));
         assert!(plist.contains("<key>RunAtLoad</key>"));
+        assert!(plist.contains("<key>PATH</key>"));
+        assert!(plist.contains("/opt/homebrew/bin"));
     }
 
     #[test]
     fn build_plist_uses_same_path_for_stdout_and_stderr() {
         let rcc = PathBuf::from("/usr/local/bin/rcc");
         let log = PathBuf::from("/tmp/rcc.log");
-        let plist = build_plist(&rcc, &log);
+        let plist = build_plist(&rcc, &log, "/usr/bin:/bin");
 
         let stdout_count = plist.matches("StandardOutPath").count();
         let stderr_count = plist.matches("StandardErrorPath").count();
