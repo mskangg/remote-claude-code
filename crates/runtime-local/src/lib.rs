@@ -221,14 +221,13 @@ pub fn pick_latest_progress_event(
 
     events[start_index..]
         .iter()
-        .filter(|event| {
+        .rfind(|event| {
             matches!(
                 event.event,
                 HookRelayEventKind::PreToolUse | HookRelayEventKind::PostToolUse
             )
         })
         .cloned()
-        .last()
 }
 
 struct LocalRuntimeState {
@@ -599,8 +598,7 @@ where
         let last_assistant_text = read_last_assistant_text_from_transcript(&transcript_path).await?;
         let last_terminal_text = events
             .iter()
-            .filter(|event| is_assistant_terminal_event(event))
-            .next_back()
+            .rfind(|event| is_assistant_terminal_event(event))
             .map(|event| event.text.as_str())
             .unwrap_or_default();
 

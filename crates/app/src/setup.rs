@@ -662,12 +662,8 @@ pub fn format_slack_artifact_resume_status_json(artifact: &SlackSetupArtifact) -
     .to_string())
 }
 
-pub fn format_bridge_output(output: &str, json: bool) -> String {
-    if json {
-        output.to_string()
-    } else {
-        output.to_string()
-    }
+pub fn format_bridge_output(output: &str, _json: bool) -> String {
+    output.to_string()
 }
 
 pub fn apply_manifest_create_response(
@@ -1127,7 +1123,7 @@ pub async fn run_setup_with_prompter(
 
     let loc = crate::locale::Locale::default();
     let lang_answer = prompter.prompt(loc.setup_choose_language())?;
-    let loc = crate::locale::Locale::from_str(&lang_answer);
+    let loc = lang_answer.parse::<crate::locale::Locale>().unwrap_or_default();
 
     match loc {
         crate::locale::Locale::Ko => {

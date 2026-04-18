@@ -513,6 +513,15 @@ impl InMemorySlackBindingStore {
             statuses: RwLock::new(HashMap::new()),
         }
     }
+}
+
+impl Default for InMemorySlackBindingStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InMemorySlackBindingStore {
 
     pub async fn insert(&self, binding: TransportBinding, session_id: SessionId) {
         self.bindings.write().await.insert(binding, session_id);
@@ -671,12 +680,12 @@ where
         };
         let message = match action {
             SlackThreadAction::OpenCommandPalette => {
-                return Ok(self
+                return self
                     .store
                     .find_session_id(&binding)
                     .await?
                     .map(|_| SessionState::Idle)
-                    .ok_or_else(|| anyhow::anyhow!("no session binding for Slack thread"))?);
+                    .ok_or_else(|| anyhow::anyhow!("no session binding for Slack thread"));
             }
             SlackThreadAction::Interrupt => SessionMsg::Interrupt,
             SlackThreadAction::SendKey { key } => SessionMsg::SendKey { key },
@@ -973,7 +982,7 @@ enum SocketModeRequest {
     },
     EventsApi {
         envelope_id: String,
-        payload: SlackPushEventCallback,
+        payload: Box<SlackPushEventCallback>,
     },
     Interactive {
         envelope_id: String,
@@ -1029,11 +1038,11 @@ fn parse_socket_mode_request(raw: &str) -> Result<SocketModeRequest> {
             envelope_id: envelope
                 .envelope_id
                 .ok_or_else(|| anyhow::anyhow!("missing envelope_id for events_api"))?,
-            payload: serde_json::from_value(
+            payload: Box::new(serde_json::from_value(
                 envelope
                     .payload
                     .ok_or_else(|| anyhow::anyhow!("missing events_api payload"))?,
-            )?,
+            )?),
         }),
         "interactive" => Ok(SocketModeRequest::Interactive {
             envelope_id: envelope

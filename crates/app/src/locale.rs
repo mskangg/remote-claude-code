@@ -7,6 +7,17 @@ pub enum Locale {
     Ko,
 }
 
+impl std::str::FromStr for Locale {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.trim().to_ascii_lowercase().as_str() {
+            "ko" | "korean" | "한국어" | "2" => Locale::Ko,
+            _ => Locale::En,
+        })
+    }
+}
+
 impl Locale {
     pub fn from_env() -> Self {
         match std::env::var("RCC_LOCALE").as_deref() {
@@ -19,13 +30,6 @@ impl Locale {
         match self {
             Locale::En => "en",
             Locale::Ko => "ko",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "ko" | "korean" | "한국어" | "2" => Locale::Ko,
-            _ => Locale::En,
         }
     }
 
@@ -260,16 +264,16 @@ mod tests {
 
     #[test]
     fn locale_from_str_parses_korean_variants() {
-        assert_eq!(Locale::from_str("ko"), Locale::Ko);
-        assert_eq!(Locale::from_str("2"), Locale::Ko);
-        assert_eq!(Locale::from_str("한국어"), Locale::Ko);
+        assert_eq!("ko".parse::<Locale>().unwrap(), Locale::Ko);
+        assert_eq!("2".parse::<Locale>().unwrap(), Locale::Ko);
+        assert_eq!("한국어".parse::<Locale>().unwrap(), Locale::Ko);
     }
 
     #[test]
     fn locale_from_str_defaults_to_english() {
-        assert_eq!(Locale::from_str("1"), Locale::En);
-        assert_eq!(Locale::from_str("en"), Locale::En);
-        assert_eq!(Locale::from_str(""), Locale::En);
+        assert_eq!("1".parse::<Locale>().unwrap(), Locale::En);
+        assert_eq!("en".parse::<Locale>().unwrap(), Locale::En);
+        assert_eq!("".parse::<Locale>().unwrap(), Locale::En);
     }
 
     #[test]

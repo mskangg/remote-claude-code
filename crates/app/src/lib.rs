@@ -105,6 +105,14 @@ impl SlackProjectLocator for JsonChannelProjectStore {
     }
 }
 
+pub type AppSlackSessionCoordinator = application::SlackApplicationService<
+    SqliteSessionRepository,
+    SessionRegistry<SqliteSessionRepository, LocalRuntime<SystemTmuxClient>>,
+    LocalRuntime<SystemTmuxClient>,
+    JsonChannelProjectStore,
+    SlackWebApiPublisher,
+>;
+
 pub struct AppContext {
     pub repository: Arc<SqliteSessionRepository>,
     pub channel_project_store: Arc<JsonChannelProjectStore>,
@@ -233,15 +241,7 @@ impl AppContext {
     pub fn slack_session_coordinator(
         &self,
         config: &SlackSocketModeConfig,
-    ) -> anyhow::Result<
-        SlackApplicationService<
-            SqliteSessionRepository,
-            SessionRegistry<SqliteSessionRepository, LocalRuntime<SystemTmuxClient>>,
-            LocalRuntime<SystemTmuxClient>,
-            JsonChannelProjectStore,
-            SlackWebApiPublisher,
-        >,
-    > {
+    ) -> anyhow::Result<AppSlackSessionCoordinator> {
         let transport = Arc::new(self.slack_transport());
         let project_locator = Arc::clone(&self.channel_project_store);
         let publisher = Arc::new(SlackWebApiPublisher::new(config.bot_token.clone())?);
@@ -419,6 +419,11 @@ pub fn parse_service_command(args: &[String]) -> ServiceCommand {
 }
 
 #[cfg(test)]
+// std::sync::MutexGuard is held across .await in async tests intentionally:
+// each #[tokio::test] creates its own current-thread runtime, so there is no
+// cross-task contention within a single test. The guard is held to prevent
+// concurrent env-var mutation from OS-level test threads running in parallel.
+#[expect(clippy::await_holding_lock)]
 mod tests {
     use core_model::{SessionState, TurnId};
     use core_service::SessionRepository;

@@ -8,6 +8,11 @@ impl ProjectId {
         Self(Uuid::new_v4())
     }
 }
+impl Default for ProjectId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionId(pub Uuid);
@@ -16,12 +21,22 @@ impl SessionId {
         Self(Uuid::new_v4())
     }
 }
+impl Default for SessionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TurnId(pub Uuid);
 impl TurnId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+}
+impl Default for TurnId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
