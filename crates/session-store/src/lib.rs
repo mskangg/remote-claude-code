@@ -1,4 +1,10 @@
-use std::{collections::HashMap, path::Path, sync::Mutex};
+//! Session state persistence backed by SQLite.
+//!
+//! [`SqliteSessionRepository`] persists session state and transport bindings
+//! (Slack channel/thread → session ID mappings) in WAL-mode SQLite.
+//! [`InMemorySessionRepository`] provides an in-process alternative for tests.
+
+use std::{collections::HashMap, path::Path, sync::{Arc, Mutex}};
 
 use async_trait::async_trait;
 use core_model::{SessionId, SessionState, TransportBinding, TransportStatusMessage};
@@ -37,7 +43,7 @@ impl SessionRepository for InMemorySessionRepository {
 }
 
 pub struct SqliteSessionRepository {
-    connection: Mutex<Connection>,
+    connection: Arc<Mutex<Connection>>,
 }
 
 impl SqliteSessionRepository {
@@ -66,8 +72,12 @@ impl SqliteSessionRepository {
         )?;
 
         Ok(Self {
-            connection: Mutex::new(connection),
+            connection: Arc::new(Mutex::new(connection)),
         })
+    }
+
+    fn connection_arc(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.connection)
     }
 
     pub fn save_transport_binding(
@@ -278,41 +288,46 @@ impl SqliteSessionRepository {
 #[async_trait]
 impl SessionRepository for SqliteSessionRepository {
     async fn load_state(&self, session_id: SessionId) -> anyhow::Result<Option<SessionState>> {
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| anyhow::anyhow!("sqlite connection lock poisoned"))?;
-        let state_json: Option<String> = connection
-            .query_row(
-                "SELECT state_json FROM sessions WHERE session_id = ?1",
-                params![session_id.0.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?;
-
-        state_json
-            .map(|json| serde_json::from_str(&json))
-            .transpose()
-            .map_err(Into::into)
+        let conn = self.connection_arc();
+        tokio::task::spawn_blocking(move || {
+            let connection = conn
+                .lock()
+                .map_err(|_| anyhow::anyhow!("sqlite connection lock poisoned"))?;
+            let state_json: Option<String> = connection
+                .query_row(
+                    "SELECT state_json FROM sessions WHERE session_id = ?1",
+                    params![session_id.0.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            state_json
+                .map(|json| serde_json::from_str(&json))
+                .transpose()
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     async fn save_state(&self, session_id: SessionId, state: &SessionState) -> anyhow::Result<()> {
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| anyhow::anyhow!("sqlite connection lock poisoned"))?;
+        let conn = self.connection_arc();
         let state_json = serde_json::to_string(state)?;
-
-        connection.execute(
-            "
-            INSERT INTO sessions (session_id, state_json)
-            VALUES (?1, ?2)
-            ON CONFLICT(session_id) DO UPDATE SET state_json = excluded.state_json
-            ",
-            params![session_id.0.to_string(), state_json],
-        )?;
-
-        Ok(())
+        tokio::task::spawn_blocking(move || {
+            let connection = conn
+                .lock()
+                .map_err(|_| anyhow::anyhow!("sqlite connection lock poisoned"))?;
+            connection.execute(
+                "
+                INSERT INTO sessions (session_id, state_json)
+                VALUES (?1, ?2)
+                ON CONFLICT(session_id) DO UPDATE SET state_json = excluded.state_json
+                ",
+                params![session_id.0.to_string(), state_json],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 }
 

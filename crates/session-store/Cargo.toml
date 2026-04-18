@@ -16,3 +16,6 @@ core-service = { path = "../core-service" }
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true

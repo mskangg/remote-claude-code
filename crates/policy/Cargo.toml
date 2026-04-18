@@ -6,3 +6,6 @@ version.workspace = true
 
 [dependencies]
 core-model = { path = "../core-model" }
+
+[lints]
+workspace = true

@@ -1,3 +1,10 @@
+//! Local Claude process runtime via tmux.
+//!
+//! [`LocalRuntime`] launches Claude inside a tmux session, relays key
+//! sequences and user commands, and polls a hook-event file written by the
+//! Claude stop-hook script to detect turn completion.  All product policy lives
+//! in `application`; this crate is pure infrastructure.
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     env,
@@ -111,13 +118,16 @@ fn extract_claude_session_id(
         .or_else(|| Some(session_id.0.to_string()))
 }
 
-fn build_project_session_log_path(project_root: &str, claude_session_id: &str) -> PathBuf {
+fn build_project_session_log_path(project_root: &str, claude_session_id: &str) -> anyhow::Result<PathBuf> {
+    let home = env::var("HOME")
+        .map(PathBuf::from)
+        .map_err(|_| anyhow::anyhow!("HOME environment variable is not set"))?;
     let encoded_project_path = project_root.replace('/', "-");
-    PathBuf::from(env::var("HOME").unwrap_or_default())
+    Ok(home
         .join(".claude")
         .join("projects")
         .join(encoded_project_path)
-        .join(format!("{claude_session_id}.jsonl"))
+        .join(format!("{claude_session_id}.jsonl")))
 }
 
 async fn read_last_assistant_text_from_transcript(transcript_path: &PathBuf) -> anyhow::Result<String> {
@@ -594,7 +604,12 @@ where
         else {
             return Ok(None);
         };
-        let transcript_path = build_project_session_log_path(&project_root, &claude_session_id);
+        // Transcript recovery is best-effort: skip silently when HOME is
+        // unavailable rather than counting it as a poller failure.
+        let transcript_path = match build_project_session_log_path(&project_root, &claude_session_id) {
+            Ok(path) => path,
+            Err(_) => return Ok(None),
+        };
         let last_assistant_text = read_last_assistant_text_from_transcript(&transcript_path).await?;
         let last_terminal_text = events
             .iter()
@@ -700,14 +715,54 @@ where
         drop(polling_sessions);
 
         let runtime = self.clone();
+        // After this many consecutive poll failures the session is considered
+        // unrecoverable and a RuntimeFailed event is emitted so the turn does
+        // not hang indefinitely.
+        const MAX_CONSECUTIVE_FAILURES: u32 = 5;
+
         let task = tokio::spawn(async move {
+            let mut consecutive_failures: u32 = 0;
             loop {
                 if !runtime.state.polling_sessions.lock().await.contains(&session_id) {
                     break;
                 }
-                let _ = runtime.poll_hook_events_once(session_id).await;
+                match runtime.poll_hook_events_once(session_id).await {
+                    Ok(()) => {
+                        consecutive_failures = 0;
+                    }
+                    Err(error) => {
+                        consecutive_failures += 1;
+                        tracing::warn!(
+                            session_id = %session_id.0,
+                            error = %error,
+                            consecutive_failures,
+                            "hook poller error"
+                        );
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                            tracing::error!(
+                                session_id = %session_id.0,
+                                "hook poller reached max consecutive failures; marking session as failed"
+                            );
+                            if runtime.current_turn(session_id).await.is_some() {
+                                let _ = runtime
+                                    .emit_current_turn_failed(
+                                        session_id,
+                                        format!(
+                                            "hook poller failed after {MAX_CONSECUTIVE_FAILURES} consecutive errors: {error}"
+                                        ),
+                                    )
+                                    .await;
+                            }
+                            break;
+                        }
+                    }
+                }
                 sleep(Duration::from_secs(2)).await;
             }
+            // Clean up so re-starts are possible and stop_hook_poller sees
+            // consistent state even when the task exits on its own.
+            runtime.state.polling_sessions.lock().await.remove(&session_id);
+            runtime.state.poller_tasks.lock().await.remove(&session_id);
         });
 
         self.state.poller_tasks.lock().await.insert(session_id, task);
@@ -1682,7 +1737,7 @@ mod tests {
         let claude_session_id = "claude-session-1";
         let original_home = env::var("HOME").ok();
         unsafe { env::set_var("HOME", &home_dir); }
-        let transcript_path = build_project_session_log_path(project_root, claude_session_id);
+        let transcript_path = build_project_session_log_path(project_root, claude_session_id).expect("transcript path");
         fs::create_dir_all(transcript_path.parent().expect("transcript parent"))
             .await
             .expect("create transcript parent");

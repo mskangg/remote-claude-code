@@ -1,3 +1,11 @@
+//! Slack application use-cases and orchestration.
+//!
+//! [`SlackApplicationService`] implements [`SlackSessionOrchestrator`]: it
+//! handles new-session creation, thread-reply routing, session listing, and
+//! thread-action dispatch.  [`SlackSessionLifecycleObserver`] translates
+//! runtime events into Slack status messages and final replies.  All Slack UX
+//! rules (status message lifecycle, command palette blocks, etc.) live here.
+
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -217,7 +225,7 @@ where
         self.publisher
             .post_thread_message_with_blocks(
                 &target,
-                &build_session_list_entry_text(&entries),
+                &build_session_list_response_text(&entries),
                 build_session_list_blocks(&entries),
             )
             .await?;
@@ -551,42 +559,27 @@ fn render_state_label(state: &SessionState) -> &'static str {
     }
 }
 
-fn build_session_list_response_text(sessions: &[SlackListedSession]) -> String {
-    if sessions.is_empty() {
+fn build_session_list_response_text(entries: &[SlackSessionListEntry]) -> String {
+    if entries.is_empty() {
         return "No active sessions.".to_string();
     }
 
-    let lines = sessions
+    let lines = entries
         .iter()
         .enumerate()
-        .map(|(index, session)| {
+        .map(|(index, entry)| {
             format!(
                 "{}. {} · {} · {}",
                 index + 1,
-                session.project_label,
-                session.thread_ts,
-                render_state_label(&session.state)
+                entry.project_label,
+                entry.thread_ts,
+                render_state_label(&entry.state)
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
     format!("Active sessions:\n{lines}")
-}
-
-fn build_session_list_entry_text(entries: &[SlackSessionListEntry]) -> String {
-    build_session_list_response_text(
-        &entries
-            .iter()
-            .map(|entry| SlackListedSession {
-                session_id: SessionId::new(),
-                tmux_session_name: entry.tmux_session_name.clone(),
-                thread_ts: entry.thread_ts.clone(),
-                project_label: entry.project_label.clone(),
-                state: entry.state.clone(),
-            })
-            .collect::<Vec<_>>(),
-    )
 }
 
 fn build_session_list_blocks(sessions: &[SlackSessionListEntry]) -> Vec<SlackBlock> {

@@ -1,5 +1,7 @@
 use std::{env, path::PathBuf, sync::Arc};
 
+use tracing_subscriber::EnvFilter;
+
 use rcc::{build_app, find_env_file, parse_cli_command, resolve_workspace_root, run_doctor, service, AppConfig, CliCommand, ServiceCommand};
 
 const HELP_TEXT: &str = "Usage: rcc [setup|doctor|service <install|uninstall|start|stop|status>|--help|--version]";
@@ -8,6 +10,13 @@ use transport_slack::{serve_socket_mode, SlackSessionOrchestrator};
 
 #[tokio::main]
 async fn main() {
+    // Initialize structured logging. Defaults to INFO; override with RUST_LOG.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
     let workspace_root = resolve_workspace_root();
     if let Some(env_file) = find_env_file(&workspace_root) {
         let _ = dotenvy::from_path(env_file);
@@ -70,20 +79,9 @@ async fn main() {
 
     match build_app(config) {
         Ok(app) => {
-            if let Err(error) = app.recover_active_sessions().await {
-                eprintln!("failed to recover active sessions: {error}");
-                std::process::exit(1);
-            }
-            match app.cleanup_orphan_tmux_sessions().await {
-                Ok(removed) if !removed.is_empty() => {
-                    eprintln!("rcc: removed orphan tmux sessions: {}", removed.join(", "));
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    eprintln!("failed to cleanup orphan tmux sessions: {error}");
-                    std::process::exit(1);
-                }
-            }
+            // Configure Slack observer BEFORE recovery so that runtime events
+            // emitted during session recovery (e.g. hook poller firing) are
+            // delivered to Slack rather than being silently dropped.
             let slack_config = match app.slack_socket_mode_config() {
                 Ok(config) => config,
                 Err(error) => {
@@ -102,6 +100,22 @@ async fn main() {
             if let Err(error) = app.configure_slack_lifecycle_observer(&slack_config) {
                 eprintln!("failed to configure Slack lifecycle observer: {error}");
                 std::process::exit(1);
+            }
+
+            // Observer is now ready; recovery events will reach Slack.
+            if let Err(error) = app.recover_active_sessions().await {
+                eprintln!("failed to recover active sessions: {error}");
+                std::process::exit(1);
+            }
+            match app.cleanup_orphan_tmux_sessions().await {
+                Ok(removed) if !removed.is_empty() => {
+                    eprintln!("rcc: removed orphan tmux sessions: {}", removed.join(", "));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!("failed to cleanup orphan tmux sessions: {error}");
+                    std::process::exit(1);
+                }
             }
 
             if let Err(error) = serve_socket_mode(orchestrator, slack_config).await {

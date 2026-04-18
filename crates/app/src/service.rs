@@ -113,7 +113,16 @@ pub fn uninstall_service(locale: &Locale) -> Result<()> {
         .map(PathBuf::from)
         .context("HOME is not set")?;
 
-    // 1. launchd 언로드 + plist 삭제
+    unload_and_remove_plist(locale)?;
+    remove_installed_binaries(&home, locale)?;
+    remove_share_directory(&home, locale)?;
+    remove_path_entries_from_profiles(&home, locale)?;
+
+    println!("{}", locale.service_uninstall_complete());
+    Ok(())
+}
+
+fn unload_and_remove_plist(locale: &Locale) -> Result<()> {
     let plist_path = service_plist_path()?;
     if plist_path.exists() {
         let _ = Command::new("launchctl")
@@ -123,8 +132,10 @@ pub fn uninstall_service(locale: &Locale) -> Result<()> {
             .with_context(|| format!("remove plist: {}", plist_path.display()))?;
         println!("{}", locale.service_removed_path(&plist_path));
     }
+    Ok(())
+}
 
-    // 2. 바이너리 삭제
+fn remove_installed_binaries(home: &Path, locale: &Locale) -> Result<()> {
     let bin_dir = home.join(".local").join("bin");
     for name in &["rcc", "rcc.bin"] {
         let path = bin_dir.join(name);
@@ -134,8 +145,10 @@ pub fn uninstall_service(locale: &Locale) -> Result<()> {
             println!("{}", locale.service_removed_path(&path));
         }
     }
+    Ok(())
+}
 
-    // 3. share 디렉토리 삭제
+fn remove_share_directory(home: &Path, locale: &Locale) -> Result<()> {
     let share_dir = home
         .join(".local")
         .join("share")
@@ -145,8 +158,10 @@ pub fn uninstall_service(locale: &Locale) -> Result<()> {
             .with_context(|| format!("remove share dir: {}", share_dir.display()))?;
         println!("{}", locale.service_removed_path(&share_dir));
     }
+    Ok(())
+}
 
-    // 4. ~/.zshrc / ~/.bash_profile 등에서 PATH 줄 제거
+fn remove_path_entries_from_profiles(home: &Path, locale: &Locale) -> Result<()> {
     let profile_candidates = [
         home.join(".zshrc"),
         home.join(".bash_profile"),
@@ -175,8 +190,6 @@ pub fn uninstall_service(locale: &Locale) -> Result<()> {
             println!("{}", locale.service_removed_path_entry(profile));
         }
     }
-
-    println!("{}", locale.service_uninstall_complete());
     Ok(())
 }
 

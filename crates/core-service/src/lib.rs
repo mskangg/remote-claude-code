@@ -1,3 +1,10 @@
+//! Session actor, reducer, and runtime forwarding policy.
+//!
+//! Owns the state machine that maps [`SessionMsg`] to [`SessionState`]
+//! transitions via the pure [`reduce`] function and decides which messages are
+//! forwarded to the runtime engine.  [`SessionRegistry`] manages per-session
+//! actors and their mailboxes.
+
 use std::{collections::HashMap, sync::{Arc, OnceLock}};
 
 use async_trait::async_trait;

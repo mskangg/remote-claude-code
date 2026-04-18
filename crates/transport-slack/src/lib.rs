@@ -1,3 +1,10 @@
+//! Slack transport layer for Remote Claude Code.
+//!
+//! Provides [`serve_socket_mode`] (the main WebSocket listener), [`SlackTransport`]
+//! (thread→session binding and message routing), and [`SlackWebApiPublisher`]
+//! (Slack API calls for posting/updating/deleting messages).  This crate owns
+//! Slack payload parsing but does **not** own product business logic.
+
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
@@ -1346,48 +1353,114 @@ pub async fn serve_socket_mode(
     let app_token: SlackApiToken = SlackApiToken::new(config.app_token.into());
     let session = client.open_session(&app_token);
 
-    eprintln!("rcc: socket mode token registered");
+    tracing::info!("socket mode token registered");
+
+    // Reconnect delay grows exponentially on repeated failures.
+    let mut reconnect_delay = Duration::from_secs(1);
+    const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+    // After this many consecutive open-connection failures the process gives up,
+    // preventing an invisible infinite retry loop when the app has a permanent
+    // misconfiguration that is not covered by the auth-string allowlist.
+    const MAX_CONSECUTIVE_OPEN_FAILURES: u32 = 10;
+    let mut consecutive_open_failures: u32 = 0;
+
     loop {
-        let open = session
+        // Request a fresh WebSocket URL from Slack. Known auth errors are fatal
+        // immediately; other failures are retried up to MAX_CONSECUTIVE_OPEN_FAILURES
+        // times before being treated as fatal.
+        let open = match session
             .apps_connections_open(&SlackApiAppsConnectionOpenRequest::new())
-            .await?;
+            .await
+        {
+            Ok(open) => {
+                consecutive_open_failures = 0;
+                open
+            }
+            Err(error) => {
+                let msg = error.to_string();
+                if msg.contains("invalid_auth")
+                    || msg.contains("not_authed")
+                    || msg.contains("token_revoked")
+                {
+                    return Err(anyhow::anyhow!("Slack auth error (not retrying): {error}"));
+                }
+                consecutive_open_failures += 1;
+                if consecutive_open_failures >= MAX_CONSECUTIVE_OPEN_FAILURES {
+                    return Err(anyhow::anyhow!(
+                        "Slack connection failed after {MAX_CONSECUTIVE_OPEN_FAILURES} consecutive attempts: {error}"
+                    ));
+                }
+                tracing::warn!(
+                    error = %error,
+                    consecutive_open_failures,
+                    reconnect_delay_secs = reconnect_delay.as_secs(),
+                    "failed to open socket mode connection; retrying"
+                );
+                sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(MAX_RECONNECT_DELAY);
+                continue;
+            }
+        };
+
         let socket_url = open.url.0.to_string();
-        eprintln!("rcc: opening socket mode websocket");
-        let (mut stream, _response) = connect_async(socket_url.as_str()).await?;
-        eprintln!("rcc: socket mode listener started");
+        tracing::debug!("opening socket mode websocket");
+
+        let (mut stream, _response) = match connect_async(socket_url.as_str()).await {
+            Ok(conn) => conn,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    reconnect_delay_secs = reconnect_delay.as_secs(),
+                    "failed to connect websocket; retrying"
+                );
+                sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(MAX_RECONNECT_DELAY);
+                continue;
+            }
+        };
+
+        // Successful connection — reset backoff.
+        reconnect_delay = Duration::from_secs(1);
+        tracing::info!("socket mode listener started");
 
         while let Some(message) = stream.next().await {
             match message {
                 Ok(Message::Text(body)) => {
                     match handle_socket_mode_text(Arc::clone(&orchestrator), body.as_ref()).await {
                         Ok(Some(reply)) => {
-                            stream.send(Message::Text(reply.into())).await?;
+                            if let Err(error) = stream.send(Message::Text(reply.into())).await {
+                                tracing::warn!(error = %error, "failed to send ack; reconnecting");
+                                break;
+                            }
                         }
                         Ok(None) => {}
                         Err(error) => {
-                            eprintln!("rcc: non-fatal socket mode handler error: {error}");
+                            tracing::warn!(error = %error, "non-fatal socket mode handler error");
                         }
                     }
                 }
                 Ok(Message::Ping(body)) => {
-                    stream.send(Message::Pong(body)).await?;
+                    if let Err(error) = stream.send(Message::Pong(body)).await {
+                        tracing::warn!(error = %error, "failed to send pong; reconnecting");
+                        break;
+                    }
                 }
                 Ok(Message::Close(frame)) => {
-                    eprintln!("rcc: socket mode websocket closed: {frame:?}");
+                    tracing::info!(frame = ?frame, "socket mode websocket closed");
                     break;
                 }
                 Ok(Message::Binary(_)) => {}
                 Ok(Message::Pong(_)) => {}
                 Ok(Message::Frame(_)) => {}
                 Err(error) => {
-                    eprintln!("rcc: socket mode websocket error: {error:?}");
+                    tracing::error!(error = ?error, "socket mode websocket error");
                     break;
                 }
             }
         }
 
-        eprintln!("rcc: reconnecting socket mode websocket");
-        sleep(Duration::from_secs(1)).await;
+        tracing::info!("reconnecting socket mode websocket");
+        sleep(reconnect_delay).await;
     }
 }
 
@@ -1400,23 +1473,23 @@ async fn handle_socket_mode_text(
             app_id,
             num_connections,
         }) => {
-            eprintln!(
-                "rcc: received socket mode hello; app_id={}, connections={}",
-                app_id, num_connections
-            );
+            tracing::debug!(app_id, num_connections, "received socket mode hello");
             Ok(None)
         }
         Ok(SocketModeRequest::Disconnect { reason }) => {
-            eprintln!("rcc: received socket mode disconnect; reason={reason}");
+            tracing::info!(reason, "received socket mode disconnect");
             Ok(None)
         }
         Ok(SocketModeRequest::SlashCommand {
             envelope_id,
             payload,
         }) => {
-            eprintln!(
-                "rcc: received slash command; command={}, channel_id={}, user_id={}, text={:?}",
-                payload.command, payload.channel_id, payload.user_id, payload.text
+            tracing::info!(
+                command = payload.command,
+                channel_id = payload.channel_id,
+                user_id = payload.user_id,
+                text = ?payload.text,
+                "received slash command"
             );
 
             let command_text = payload.text.as_deref().map(str::trim).unwrap_or("");
@@ -1431,7 +1504,7 @@ async fn handle_socket_mode_text(
                 let orchestrator = Arc::clone(&orchestrator);
                 tokio::spawn(async move {
                     if let Err(error) = orchestrator.start_new_session(&channel_id).await {
-                        eprintln!("failed to start Slack session for {channel_id}: {error}");
+                        tracing::error!(channel_id, error = %error, "failed to start Slack session");
                     }
                 });
 
@@ -1448,7 +1521,7 @@ async fn handle_socket_mode_text(
         }) => {
             if let Some(reply) = parse_push_thread_reply(&payload) {
                 if let Err(error) = orchestrator.handle_session_reply(reply).await {
-                    eprintln!("failed to handle Slack thread reply: {error}");
+                    tracing::warn!(error = %error, "failed to handle Slack thread reply");
                 }
             }
 
@@ -1459,9 +1532,12 @@ async fn handle_socket_mode_text(
             action,
         }) => {
             if let Some(action) = action {
-                eprintln!(
-                    "rcc: received interactive action; action_id={}, channel_id={}, thread_ts={:?}, value={:?}",
-                    action.action_id, action.channel_id, action.thread_ts, action.value
+                tracing::info!(
+                    action_id = action.action_id,
+                    channel_id = action.channel_id,
+                    thread_ts = ?action.thread_ts,
+                    value = ?action.value,
+                    "received interactive action"
                 );
                 match action.action_id.as_str() {
                     "claude_session_new" => {
@@ -1469,8 +1545,10 @@ async fn handle_socket_mode_text(
                         let orchestrator = Arc::clone(&orchestrator);
                         tokio::spawn(async move {
                             if let Err(error) = orchestrator.start_new_session(&channel_id).await {
-                                eprintln!(
-                                    "failed to start Slack session from interactive action for {channel_id}: {error}"
+                                tracing::error!(
+                                    channel_id,
+                                    error = %error,
+                                    "failed to start Slack session from interactive action"
                                 );
                             }
                         });
@@ -1481,15 +1559,17 @@ async fn handle_socket_mode_text(
                                 .post_session_list(&action.channel_id, &thread_ts)
                                 .await
                             {
-                                eprintln!(
-                                    "failed to post session list for channel_id={}, thread_ts={}: {}",
-                                    action.channel_id, thread_ts, error
+                                tracing::warn!(
+                                    channel_id = action.channel_id,
+                                    thread_ts,
+                                    error = %error,
+                                    "failed to post session list"
                                 );
                             }
                         } else {
-                            eprintln!(
-                                "rcc: interactive session list missing thread context for channel_id={}",
-                                action.channel_id
+                            tracing::warn!(
+                                channel_id = action.channel_id,
+                                "interactive session list missing thread context"
                             );
                         }
                     }
@@ -1503,9 +1583,11 @@ async fn handle_socket_mode_text(
                                 )
                                 .await
                             {
-                                eprintln!(
-                                    "failed to open command palette for channel_id={}, thread_ts={}: {}",
-                                    action.channel_id, thread_ts, error
+                                tracing::warn!(
+                                    channel_id = action.channel_id,
+                                    thread_ts,
+                                    error = %error,
+                                    "failed to open command palette"
                                 );
                             }
                         }
@@ -1520,9 +1602,11 @@ async fn handle_socket_mode_text(
                                 )
                                 .await
                             {
-                                eprintln!(
-                                    "failed to interrupt session for channel_id={}, thread_ts={}: {}",
-                                    action.channel_id, thread_ts, error
+                                tracing::warn!(
+                                    channel_id = action.channel_id,
+                                    thread_ts,
+                                    error = %error,
+                                    "failed to interrupt session"
                                 );
                             }
                         }
@@ -1542,9 +1626,11 @@ async fn handle_socket_mode_text(
                                 )
                                 .await
                             {
-                                eprintln!(
-                                    "failed to send key to session for channel_id={}, thread_ts={}: {}",
-                                    action.channel_id, thread_ts, error
+                                tracing::warn!(
+                                    channel_id = action.channel_id,
+                                    thread_ts,
+                                    error = %error,
+                                    "failed to send key to session"
                                 );
                             }
                         }
@@ -1564,9 +1650,11 @@ async fn handle_socket_mode_text(
                                 )
                                 .await
                             {
-                                eprintln!(
-                                    "failed to send clear command for channel_id={}, thread_ts={}: {}",
-                                    action.channel_id, thread_ts, error
+                                tracing::warn!(
+                                    channel_id = action.channel_id,
+                                    thread_ts,
+                                    error = %error,
+                                    "failed to send clear command"
                                 );
                             }
                         }
@@ -1585,9 +1673,11 @@ async fn handle_socket_mode_text(
                                 )
                                 .await
                             {
-                                eprintln!(
-                                    "failed to send CLAUDE.md update command for channel_id={}, thread_ts={}: {}",
-                                    action.channel_id, thread_ts, error
+                                tracing::warn!(
+                                    channel_id = action.channel_id,
+                                    thread_ts,
+                                    error = %error,
+                                    "failed to send CLAUDE.md update command"
                                 );
                             }
                         }
@@ -1602,31 +1692,32 @@ async fn handle_socket_mode_text(
                                 )
                                 .await
                             {
-                                eprintln!(
-                                    "failed to terminate session for channel_id={}, thread_ts={}: {}",
-                                    action.channel_id, thread_ts, error
+                                tracing::warn!(
+                                    channel_id = action.channel_id,
+                                    thread_ts,
+                                    error = %error,
+                                    "failed to terminate session"
                                 );
                             }
                         }
                     }
                     "claude_session_open_thread" => {}
                     other => {
-                        eprintln!("rcc: ignored interactive action_id={other}");
+                        tracing::debug!(action_id = other, "ignored interactive action");
                     }
                 }
             }
             Ok(Some(build_socket_mode_ack(&envelope_id, None)?))
         }
         Ok(SocketModeRequest::Unknown { envelope_id, kind }) => {
-            eprintln!("rcc: ignored socket mode event type={kind}");
+            tracing::debug!(kind, "ignored socket mode event type");
             match envelope_id {
                 Some(envelope_id) => Ok(Some(build_socket_mode_ack(&envelope_id, None)?)),
                 None => Ok(None),
             }
         }
         Err(error) => {
-            eprintln!("rcc: failed to parse socket mode payload: {error}");
-            eprintln!("rcc: raw socket mode payload: {raw}");
+            tracing::error!(error = %error, raw, "failed to parse socket mode payload");
             Ok(None)
         }
     }

@@ -1,3 +1,9 @@
+//! Domain model for Remote Claude Code.
+//!
+//! Defines the core identifiers ([`SessionId`], [`TurnId`]), state machine
+//! types ([`SessionState`]), and message envelope ([`SessionMsg`]) that all
+//! other crates depend on.  This crate has no external runtime dependencies.
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

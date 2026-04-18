@@ -18,7 +18,11 @@ session-store = { path = "../session-store" }
 slack-morphism = { version = "2.19.0", features = ["hyper"] }
 tokio.workspace = true
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true

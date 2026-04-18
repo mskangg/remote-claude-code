@@ -10,3 +10,6 @@ async-trait.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 core-model = { path = "../core-model" }
+
+[lints]
+workspace = true

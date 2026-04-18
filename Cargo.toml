@@ -17,6 +17,15 @@ license = "MIT"
 version = "0.1.0"
 authors = ["mskangg"]
 
+[workspace.lints.rust]
+future-incompatible = "warn"
+
+[workspace.lints.clippy]
+redundant_clone = "warn"
+needless_collect = "warn"
+large_enum_variant = "warn"
+clone_on_copy = "warn"
+
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"
@@ -24,5 +33,6 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "macros", "process", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 url = "2"
