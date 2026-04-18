@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"export PATH=\\\"$HOME/.cargo/bin:$PATH\\\" && mkdir -p .local && cargo run -p rcc -- setup --write-slack-artifact-template .local/slack-setup-artifact.json 2>&1\"}",
-  "error": "Exit code 127\n(eval):1: command not found: cargo",
-  "timestamp": "2026-04-17T16:41:03.685Z",
-  "retry_count": 2
-}
