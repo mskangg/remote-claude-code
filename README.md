@@ -37,7 +37,15 @@
 
 ## Quickstart
 
-### 1. 플러그인 설치
+### 1. 레포 클론 및 Claude Code 실행
+
+```bash
+git clone https://github.com/mskangg/remote-claude-code.git
+cd remote-claude-code
+claude
+```
+
+### 2. 플러그인 설치
 
 마켓플레이스 추가:
 
@@ -51,7 +59,7 @@
 /plugin install remote-claude-code-setup@remote-claude-code
 ```
 
-### 2. Claude Code에서 셋업 시작
+### 3. Claude Code에서 셋업 시작
 
 아래처럼 말하면 됩니다.
 
@@ -65,7 +73,7 @@ remote-claude-code 셋업해줘
 슬랙 연동 설치해줘
 ```
 
-### 3. 설치 마법사 진행
+### 4. 설치 마법사 진행
 
 setup wizard는 다음 순서로 진행됩니다.
 - 로컬 환경 확인
@@ -79,7 +87,7 @@ setup wizard는 다음 순서로 진행됩니다.
 
 `apps.manifest.create` 기반 자동 생성 경로는 코드에 남아 있지만, 현재 공개 기본 경로로는 사용하지 않습니다.
 
-### 4. 설치 완료 후 실행
+### 5. 설치 완료 후 실행
 
 설치가 끝나면 기본 실행 경로는 아래처럼 안내합니다.
 
