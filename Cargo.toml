@@ -21,12 +21,14 @@ description = "Control your Claude Code sessions from Slack — anywhere, any de
 
 [workspace.lints.rust]
 future-incompatible = "warn"
+nonstandard_style = "deny"
 
 [workspace.lints.clippy]
-redundant_clone = "warn"
-needless_collect = "warn"
-large_enum_variant = "warn"
-clone_on_copy = "warn"
+all = { level = "warn", priority = -1 }
+redundant_clone = { level = "warn", priority = 5 }
+needless_collect = { level = "warn", priority = 5 }
+large_enum_variant = { level = "warn", priority = 5 }
+clone_on_copy = { level = "warn", priority = 5 }
 
 [workspace.dependencies]
 anyhow = "1"

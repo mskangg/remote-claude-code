@@ -906,7 +906,7 @@ mod tests {
         };
 
         let mut prompter = setup::FakePrompter::new(vec![setup::FakeAnswer::Prompt("n".into())]);
-        let result = setup::execute_setup(&config, workspace_root, input, &mut prompter).await;
+        let result = setup::execute_setup(&config, workspace_root, input, &mut prompter, crate::locale::Locale::Ko).await;
 
         assert!(result.is_ok(), "{result:?}");
         assert!(
@@ -1065,7 +1065,7 @@ mod tests {
             setup::blocked_outcome_from_prerequisites(&prerequisites, std::path::Path::new("/tmp/workspace"));
 
         assert!(matches!(outcome, setup::SetupOutcome::Blocked { .. }));
-        assert!(setup::format_setup_outcome(&outcome).contains("tmux is not available on PATH"));
+        assert!(setup::format_setup_outcome(outcome).contains("tmux is not available on PATH"));
     }
 
     #[tokio::test]
@@ -1090,7 +1090,6 @@ mod tests {
         };
 
         let mut prompter = setup::FakePrompter::new(vec![
-            setup::FakeAnswer::Prompt("1".into()), // language selection: English
             setup::FakeAnswer::Confirm,
         ]);
         let error = setup::run_setup_with_prompter(
@@ -1103,6 +1102,7 @@ mod tests {
                 ..Default::default()
             },
             &mut prompter,
+            crate::locale::Locale::En,
         )
         .await
         .expect_err("missing values should stop after manual-required guidance");
@@ -1778,7 +1778,7 @@ mod tests {
 
         // "n" to skip running the installer script (only prompt after doctor passes)
         let mut prompter = setup::FakePrompter::new(vec![setup::FakeAnswer::Prompt("n".into())]);
-        let result = setup::execute_setup(&config, workspace_root, input, &mut prompter).await;
+        let result = setup::execute_setup(&config, workspace_root, input, &mut prompter, crate::locale::Locale::En).await;
 
         // EnvGuards drop here, restoring SLACK_* env vars automatically.
         assert!(result.is_ok(), "{result:?}");

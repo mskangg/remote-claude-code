@@ -129,6 +129,7 @@ pub struct SetupCliOptions {
     pub merge_slack_artifact: Option<PathBuf>,
     pub write_slack_artifact_template: Option<PathBuf>,
     pub slack_app_configuration_token: Option<String>,
+    pub locale: Option<crate::locale::Locale>,
     pub non_interactive: bool,
     pub json: bool,
 }
@@ -262,6 +263,7 @@ pub fn parse_setup_cli_options(args: &[String]) -> SetupCliOptions {
     let mut merge_slack_artifact = None;
     let mut write_slack_artifact_template = None;
     let mut slack_app_configuration_token = None;
+    let mut locale = None;
     let mut non_interactive = false;
     let mut json = false;
     let mut index = 2;
@@ -313,6 +315,14 @@ pub fn parse_setup_cli_options(args: &[String]) -> SetupCliOptions {
                     break;
                 }
             }
+            "--locale" => {
+                if let Some(next) = args.get(index + 1) {
+                    locale = Some(next.parse::<crate::locale::Locale>().unwrap_or_default());
+                    index += 2;
+                } else {
+                    break;
+                }
+            }
             "--non-interactive" => {
                 non_interactive = true;
                 index += 1;
@@ -333,6 +343,7 @@ pub fn parse_setup_cli_options(args: &[String]) -> SetupCliOptions {
         merge_slack_artifact,
         write_slack_artifact_template,
         slack_app_configuration_token,
+        locale,
         non_interactive,
         json,
     }
@@ -741,20 +752,20 @@ pub fn blocked_outcome_from_prerequisites(
     }
 }
 
-pub fn format_setup_outcome(outcome: &SetupOutcome) -> String {
+pub fn format_setup_outcome(outcome: SetupOutcome) -> String {
     match outcome {
-        SetupOutcome::Completed { summary } => summary.clone(),
+        SetupOutcome::Completed { summary } => summary,
         SetupOutcome::ManualRequired {
             summary,
             next_actions,
         } => {
-            let mut lines = vec![summary.clone()];
+            let mut lines = vec![summary];
             for action in next_actions {
                 lines.push(format!("- {action}"));
             }
             lines.join("\n")
         }
-        SetupOutcome::Blocked { reason } | SetupOutcome::Failed { reason } => reason.clone(),
+        SetupOutcome::Blocked { reason } | SetupOutcome::Failed { reason } => reason,
     }
 }
 
@@ -997,6 +1008,7 @@ pub async fn execute_setup(
     workspace_root: &Path,
     input: SetupInput,
     prompter: &mut dyn SetupPrompter,
+    locale: crate::locale::Locale,
 ) -> Result<()> {
     let project_root = input.project_root.as_deref().context("missing project_root")?;
     validate_project_root(project_root)?;
@@ -1009,7 +1021,7 @@ pub async fn execute_setup(
             ("SLACK_SIGNING_SECRET", input.slack_signing_secret.as_deref().context("missing slack_signing_secret")?),
             ("SLACK_APP_TOKEN", input.slack_app_token.as_deref().context("missing slack_app_token")?),
             ("SLACK_ALLOWED_USER_ID", input.slack_allowed_user_id.as_deref().context("missing slack_allowed_user_id")?),
-            ("RCC_LOCALE", config.locale.code()),
+            ("RCC_LOCALE", locale.code()),
         ],
     )?;
     let _ = from_path_override(&env_path);
@@ -1053,7 +1065,7 @@ pub async fn execute_setup(
             perms.set_mode(0o755);
             fs::set_permissions(&installer_script_path, perms)?;
         }
-        let loc = &config.locale;
+        let loc = &locale;
         prompter.println(&loc.setup_completion_message(&install_path, &profile_path, &installer_script_path));
         let answer = prompter.prompt(loc.setup_run_installer_prompt())?;
         if should_run_installer(&answer) {
@@ -1093,13 +1105,13 @@ pub async fn run_setup_with_manifest_api<A: SlackManifestApi + Sync>(
             let updated = apply_manifest_create_response(artifact, &response);
             let body = serde_json::to_string_pretty(&updated)?;
             fs::write(&artifact_path, format!("{body}\n"))?;
-            bail!(format_setup_outcome(&slack_manual_required_outcome(
+            bail!(format_setup_outcome(slack_manual_required_outcome(
                 &apply_slack_setup_artifact(initial_input, updated),
                 &artifact_path,
             )))
         }
         Err(_) => {
-            bail!(format_setup_outcome(&slack_manual_required_outcome(
+            bail!(format_setup_outcome(slack_manual_required_outcome(
                 &initial_input,
                 &artifact_path,
             )))
@@ -1112,19 +1124,17 @@ pub async fn run_setup_with_prompter(
     workspace_root: &Path,
     initial_input: SetupInput,
     prompter: &mut dyn SetupPrompter,
+    locale: crate::locale::Locale,
 ) -> Result<()> {
     let prerequisites = collect_setup_prerequisites(config, workspace_root);
     if prerequisites.has_hard_failure() {
-        bail!(format_setup_outcome(&blocked_outcome_from_prerequisites(
+        bail!(format_setup_outcome(blocked_outcome_from_prerequisites(
             &prerequisites,
             workspace_root,
         )));
     }
 
-    let loc = crate::locale::Locale::default();
-    let lang_answer = prompter.prompt(loc.setup_choose_language())?;
-    let loc = lang_answer.parse::<crate::locale::Locale>().unwrap_or_default();
-
+    let loc = locale;
     match loc {
         crate::locale::Locale::Ko => {
             prompter.println("Remote Claude Code 설치를 시작합니다.");
@@ -1145,7 +1155,7 @@ pub async fn run_setup_with_prompter(
     let artifact_path = pending_slack_artifact_path(workspace_root);
     write_slack_setup_artifact_template(&artifact_path, &initial_input)?;
 
-    bail!(format_setup_outcome(&slack_manual_required_outcome(
+    bail!(format_setup_outcome(slack_manual_required_outcome(
         &initial_input,
         &artifact_path,
     )));
@@ -1155,7 +1165,7 @@ pub async fn run_setup(config: &AppConfig, args: &[String]) -> Result<()> {
     let workspace_root = std::env::current_dir().context("read current directory")?;
     let prerequisites = collect_setup_prerequisites(config, &workspace_root);
     if prerequisites.has_hard_failure() {
-        bail!(format_setup_outcome(&blocked_outcome_from_prerequisites(
+        bail!(format_setup_outcome(blocked_outcome_from_prerequisites(
             &prerequisites,
             &workspace_root,
         )));
@@ -1221,11 +1231,19 @@ pub async fn run_setup(config: &AppConfig, args: &[String]) -> Result<()> {
         .await;
     }
 
+    let locale = if options.non_interactive {
+        options.locale.unwrap_or_else(crate::locale::Locale::from_env)
+    } else {
+        let default_loc = crate::locale::Locale::default();
+        let answer = prompter.prompt(default_loc.setup_choose_language())?;
+        answer.parse::<crate::locale::Locale>().unwrap_or_default()
+    };
+
     if !options.non_interactive {
-        return run_setup_with_prompter(config, &workspace_root, input, &mut prompter).await;
+        return run_setup_with_prompter(config, &workspace_root, input, &mut prompter, locale).await;
     }
 
     let resolved = resolve_setup_input(input, true, &mut prompter).await?;
     run_release_build(&workspace_root)?;
-    execute_setup(config, &workspace_root, resolved, &mut prompter).await
+    execute_setup(config, &workspace_root, resolved, &mut prompter, locale).await
 }

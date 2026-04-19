@@ -123,7 +123,8 @@ cargo run -p rcc -- setup --write-slack-artifact-template .local/slack-setup-art
 cargo run -p rcc -- setup --merge-slack-artifact <patch.json> --json
 
 # 3. 설치 (release 빌드 + 바이너리 설치 + 설정 기록 자동)
-cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive
+# 언어 선택: --locale ko (한국어) 또는 --locale en (기본값, 영어)
+cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive --locale ko
 
 # 4. 검증
 rcc doctor
@@ -133,6 +134,8 @@ rcc service install && rcc service start
 ```
 
 `setup`은 automation-first 설치 마법사이지만, 현재 공개 기본 경로는 검증된 semi-automatic Slack 콘솔 루트입니다. Claude가 단계별로 링크와 manifest를 제공하고, 값은 하나씩 받아 artifact 기반으로 resume, `doctor`, release build까지 이어집니다.
+
+언어는 `--locale ko|en` 플래그로 지정합니다. 플래그를 생략하면 `RCC_LOCALE` 환경변수를 읽고, 그마저도 없으면 영어가 기본값입니다.
 
 #### Experimental manifest API path
 

@@ -1212,4 +1212,367 @@ mod tests {
             "✅ Finalizing response...".to_string(),
         )]);
     }
+
+    // ── 한글 픽스처 ────────────────────────────────────────────────────────────
+
+    async fn 활성_세션_상태메시지_셋업(
+        channel_id: &str,
+        thread_ts: &str,
+        status_ts: &str,
+    ) -> (
+        SessionId,
+        Arc<RecordingSessionPublisher>,
+        SlackSessionLifecycleObserver<InMemorySlackBindingStore, RecordingSessionPublisher>,
+    ) {
+        let store = Arc::new(InMemorySlackBindingStore::new());
+        let session_id = SessionId::new();
+        let binding = TransportBinding {
+            project_space_id: channel_id.to_string(),
+            session_space_id: thread_ts.to_string(),
+        };
+        store.insert(binding.clone(), session_id).await;
+        store
+            .save_status_message(&TransportStatusMessage {
+                binding,
+                status_message_id: status_ts.to_string(),
+            })
+            .await
+            .expect("save status");
+        let publisher = Arc::new(RecordingSessionPublisher::default());
+        let observer = SlackSessionLifecycleObserver::new(store, publisher.clone());
+        (session_id, publisher, observer)
+    }
+
+    fn 바인딩_없는_서비스_셋업() -> SlackApplicationService<
+        InMemorySlackBindingStore,
+        RecordingResolver,
+        RecordingConfigurator,
+        RecordingProjectLocator,
+        RecordingSessionPublisher,
+    > {
+        let store = Arc::new(InMemorySlackBindingStore::new());
+        let resolver = Arc::new(RecordingResolver { handle: None });
+        let transport = Arc::new(SlackTransport::new(
+            store,
+            resolver,
+            Arc::new(RecordingConfigurator::default()),
+        ));
+        let publisher = Arc::new(RecordingSessionPublisher::default());
+        let locator = Arc::new(RecordingProjectLocator::default());
+        SlackApplicationService::new(transport, locator, publisher)
+    }
+
+    // ── Scenario: status message 전체 생명주기 ─────────────────────────────────
+    //
+    // Scenario: turn 중 상태 메시지가 진행 중 갱신되고, 완료 시 삭제된 후 최종 답변이 게시된다
+    //   Given 활성 세션이 있고 상태 메시지가 존재한다
+    //   When 런타임 진행 이벤트가 발생한다
+    //   Then 상태 메시지가 갱신된다
+    //   When 런타임 완료 이벤트가 발생한다
+    //   Then 상태 메시지가 삭제된다
+    //   And 최종 답변이 thread에 게시된다
+    #[tokio::test]
+    async fn 상태_메시지가_진행중_갱신되고_완료시_삭제된_후_최종답변이_게시된다() {
+        // Given
+        let (session_id, publisher, observer) =
+            활성_세션_상태메시지_셋업("C777", "5000.100", "5000.200").await;
+
+        // When - 런타임 진행 이벤트
+        observer
+            .on_state_changed(
+                session_id,
+                &SessionMsg::RuntimeProgress { text: "Working...".to_string() },
+                &SessionState::Running { active_turn: TurnId::new() },
+            )
+            .await
+            .expect("observe progress");
+
+        // Then - 진행 중: 상태 갱신, 삭제·최종답변 없음
+        assert!(!publisher.status_updates.lock().await.is_empty());
+        assert!(publisher.deleted_messages.lock().await.is_empty());
+        assert!(publisher.final_replies.lock().await.is_empty());
+
+        // When - 런타임 완료 이벤트
+        observer
+            .on_state_changed(
+                session_id,
+                &SessionMsg::RuntimeCompleted {
+                    turn_id: TurnId::new(),
+                    summary: "작업 완료".to_string(),
+                },
+                &SessionState::Idle,
+            )
+            .await
+            .expect("observe completion");
+
+        // Then - 완료 후: 상태 메시지 삭제 + 최종 답변 게시
+        assert!(!publisher.deleted_messages.lock().await.is_empty());
+        assert_eq!(
+            publisher.final_replies.lock().await.first().map(|(_, text)| text.as_str()),
+            Some("작업 완료"),
+        );
+    }
+
+    // ── Scenario: 종료된 세션 stale action ────────────────────────────────────
+    //
+    // Scenario: 종료된 세션에 stale action이 와도 프로세스가 죽지 않는다
+    //   Given 바인딩이 없는 channel/thread가 있다
+    //   When 해당 thread에 커맨드 action이 도착한다
+    //   Then 오류를 반환하지만 서비스는 계속 실행된다
+    //   And 이후 요청도 panic 없이 처리된다
+    #[tokio::test]
+    async fn 종료된_세션에_stale_action이_와도_서비스가_생존한다() {
+        // Given
+        let service = 바인딩_없는_서비스_셋업();
+
+        // When - 바인딩 없는 세션에 action 도착
+        let result = service
+            .handle_thread_action_internal("C_DEAD", "9999.100", SlackThreadAction::Terminate)
+            .await;
+
+        // Then - panic 없이 오류 반환
+        assert!(result.is_err(), "바인딩 없는 세션 action은 오류여야 함");
+
+        // And - 서비스 생존: 이후 호출도 panic 없이 처리
+        let result2 = service
+            .handle_thread_action_internal(
+                "C_DEAD",
+                "9999.100",
+                SlackThreadAction::OpenCommandPalette,
+            )
+            .await;
+        assert!(result2.is_err(), "두 번째 stale action도 panic 없이 오류 반환");
+    }
+
+    // ── 엣지케이스: 알 수 없는 session_id 이벤트 무시 ─────────────────────────
+    //
+    // Scenario: 바인딩이 없는 session_id의 상태 변경 이벤트는 무시된다
+    //   Given 바인딩이 등록되지 않은 session_id가 있다
+    //   When 해당 session_id로 런타임 완료 이벤트가 발생한다
+    //   Then 오류 없이 무시된다
+    //   And 어떤 메시지도 게시되지 않는다
+    #[tokio::test]
+    async fn 알수없는_세션_상태변경_이벤트는_무시된다() {
+        let store = Arc::new(InMemorySlackBindingStore::new());
+        let publisher = Arc::new(RecordingSessionPublisher::default());
+        let observer = SlackSessionLifecycleObserver::new(store, publisher.clone());
+
+        // Given - 등록된 적 없는 session_id
+        let unknown_session = SessionId::new();
+
+        // When
+        observer
+            .on_state_changed(
+                unknown_session,
+                &SessionMsg::RuntimeCompleted {
+                    turn_id: TurnId::new(),
+                    summary: "done".to_string(),
+                },
+                &SessionState::Idle,
+            )
+            .await
+            .expect("알 수 없는 session은 조용히 무시되어야 함");
+
+        // Then
+        assert!(publisher.deleted_messages.lock().await.is_empty());
+        assert!(publisher.final_replies.lock().await.is_empty());
+    }
+
+    // ── 엣지케이스: 상태메시지 없는 세션 이벤트 무시 ──────────────────────────
+    //
+    // Scenario: 바인딩은 있지만 상태 메시지가 없는 세션의 완료 이벤트는 무시된다
+    //   Given 세션 바인딩은 있지만 상태 메시지가 없다
+    //   When 런타임 완료 이벤트가 발생한다
+    //   Then 오류 없이 무시된다
+    //   And 어떤 메시지도 게시되지 않는다
+    #[tokio::test]
+    async fn 상태메시지_없는_세션_완료_이벤트는_무시된다() {
+        let store = Arc::new(InMemorySlackBindingStore::new());
+        let session_id = SessionId::new();
+        let binding = TransportBinding {
+            project_space_id: "C777".to_string(),
+            session_space_id: "6000.100".to_string(),
+        };
+        store.insert(binding, session_id).await;
+        let publisher = Arc::new(RecordingSessionPublisher::default());
+        let observer = SlackSessionLifecycleObserver::new(store, publisher.clone());
+
+        // When
+        observer
+            .on_state_changed(
+                session_id,
+                &SessionMsg::RuntimeCompleted {
+                    turn_id: TurnId::new(),
+                    summary: "done".to_string(),
+                },
+                &SessionState::Idle,
+            )
+            .await
+            .expect("상태 메시지 없는 세션은 조용히 무시되어야 함");
+
+        // Then
+        assert!(publisher.deleted_messages.lock().await.is_empty());
+        assert!(publisher.final_replies.lock().await.is_empty());
+    }
+
+    // ── 엣지케이스: 빈 summary 완료는 최종답변 스킵 ───────────────────────────
+    //
+    // Scenario: 빈 summary로 완료된 turn은 최종답변을 게시하지 않는다 (/clear 등)
+    //   Given 활성 세션이 있고 상태 메시지가 존재한다
+    //   When 빈 summary로 런타임 완료 이벤트가 발생한다
+    //   Then 상태 메시지는 삭제된다
+    //   And 최종 답변은 게시되지 않는다
+    #[tokio::test]
+    async fn 빈_summary_완료_이벤트는_최종답변을_게시하지_않는다() {
+        // Given
+        let (session_id, publisher, observer) =
+            활성_세션_상태메시지_셋업("C777", "6100.100", "6100.200").await;
+
+        // When
+        observer
+            .on_state_changed(
+                session_id,
+                &SessionMsg::RuntimeCompleted {
+                    turn_id: TurnId::new(),
+                    summary: "   ".to_string(),
+                },
+                &SessionState::Idle,
+            )
+            .await
+            .expect("observe completion");
+
+        // Then
+        assert!(!publisher.deleted_messages.lock().await.is_empty(), "상태 메시지는 삭제되어야 함");
+        assert!(publisher.final_replies.lock().await.is_empty(), "빈 summary는 최종답변 없어야 함");
+    }
+
+    // ── 엣지케이스: RuntimeFailed 전체 생명주기 ───────────────────────────────
+    //
+    // Scenario: 런타임 실패 시 상태 메시지가 삭제되고 실패 메시지가 thread에 게시된다
+    //   Given 활성 세션이 있고 상태 메시지가 존재한다
+    //   When 런타임 실패 이벤트가 발생한다
+    //   Then 상태 메시지가 삭제된다
+    //   And 실패 원인이 포함된 최종 메시지가 게시된다
+    #[tokio::test]
+    async fn 런타임_실패시_상태메시지_삭제_후_실패메시지가_게시된다() {
+        // Given
+        let (session_id, publisher, observer) =
+            활성_세션_상태메시지_셋업("C777", "6200.100", "6200.200").await;
+
+        // When
+        observer
+            .on_state_changed(
+                session_id,
+                &SessionMsg::RuntimeFailed {
+                    turn_id: TurnId::new(),
+                    error: "tmux session lost".to_string(),
+                },
+                &SessionState::Failed { reason: "tmux session lost".to_string() },
+            )
+            .await
+            .expect("observe failure");
+
+        // Then
+        assert!(!publisher.deleted_messages.lock().await.is_empty(), "상태 메시지 삭제 없음");
+        let replies = publisher.final_replies.lock().await;
+        assert_eq!(replies.len(), 1);
+        assert!(
+            replies[0].1.contains("tmux session lost"),
+            "실패 메시지에 오류 원인이 포함되어야 함: {}",
+            replies[0].1,
+        );
+    }
+
+    // ── 엣지케이스: 프로젝트 매핑 없는 채널 세션 생성 실패 ────────────────────
+    //
+    // Scenario: 프로젝트 매핑이 없는 채널에서 세션을 열면 NoProjectMapping 오류가 반환된다
+    //   Given 채널에 프로젝트 매핑이 없다
+    //   When 새 세션 열기를 요청한다
+    //   Then NoProjectMapping 오류가 반환된다
+    #[tokio::test]
+    async fn 프로젝트_매핑_없는_채널_세션_생성_요청은_실패한다() {
+        // Given
+        let service = 바인딩_없는_서비스_셋업();
+
+        // When
+        let result = service.start_new_session_internal("C_UNMAPPED").await;
+
+        // Then
+        assert!(
+            matches!(result.unwrap_err(), ApplicationError::NoProjectMapping { .. }),
+            "프로젝트 매핑 없으면 NoProjectMapping 오류여야 함"
+        );
+    }
+
+    // ── 엣지케이스: 다양한 stale action 타입별 서비스 생존 ────────────────────
+    //
+    // Scenario: 종료된 세션에 Interrupt / SendKey / SendCommand가 와도 프로세스가 죽지 않는다
+    //   Given 바인딩이 없는 세션이 있다
+    //   When Interrupt, SendKey, SendCommand action이 차례로 도착한다
+    //   Then 모두 오류로 처리되고 서비스는 계속 실행된다
+    #[tokio::test]
+    async fn 종료된_세션에_다양한_action_타입이_와도_서비스가_생존한다() {
+        // Given
+        let service = 바인딩_없는_서비스_셋업();
+
+        // When & Then - Interrupt
+        assert!(
+            service
+                .handle_thread_action_internal("C_DEAD", "9999.200", SlackThreadAction::Interrupt)
+                .await
+                .is_err(),
+            "Interrupt stale action은 오류여야 함"
+        );
+
+        // When & Then - SendKey
+        assert!(
+            service
+                .handle_thread_action_internal(
+                    "C_DEAD",
+                    "9999.200",
+                    SlackThreadAction::SendKey { key: "C-c".to_string() },
+                )
+                .await
+                .is_err(),
+            "SendKey stale action은 오류여야 함"
+        );
+
+        // When & Then - SendCommand
+        assert!(
+            service
+                .handle_thread_action_internal(
+                    "C_DEAD",
+                    "9999.200",
+                    SlackThreadAction::SendCommand { text: "cargo test".to_string() },
+                )
+                .await
+                .is_err(),
+            "SendCommand stale action은 오류여야 함"
+        );
+    }
+
+    // ── 엣지케이스: 바인딩 없는 thread 답장 실패 ──────────────────────────────
+    //
+    // Scenario: 세션 바인딩이 없는 thread에 답장하면 오류가 반환된다
+    //   Given thread 바인딩이 없다
+    //   When 해당 thread에 메시지를 보낸다
+    //   Then 오류가 반환된다
+    //   And 서비스는 계속 실행된다
+    #[tokio::test]
+    async fn 바인딩_없는_thread_답장은_오류를_반환한다() {
+        // Given
+        let service = 바인딩_없는_서비스_셋업();
+
+        // When
+        let result = service
+            .handle_session_reply_internal(SlackThreadReply {
+                channel_id: "C_DEAD".to_string(),
+                thread_ts: "9999.300".to_string(),
+                text: "안녕하세요".to_string(),
+            })
+            .await;
+
+        // Then
+        assert!(result.is_err(), "바인딩 없는 thread 답장은 오류여야 함");
+    }
 }

@@ -39,6 +39,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
  "transport-slack",
  "url",
 ]
