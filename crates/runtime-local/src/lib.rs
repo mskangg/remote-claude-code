@@ -194,17 +194,19 @@ async fn read_last_assistant_text_from_transcript(transcript_path: &PathBuf) -> 
     Ok(String::new())
 }
 
+/// Prompt must appear within this many lines from the bottom of the pane.
+/// Farther up implies the pane is showing scrollback, not the live prompt.
+const IDLE_PROMPT_MAX_LINES_FROM_BOTTOM: usize = 6;
+
 fn get_idle_prompt_input(pane: &str) -> Option<String> {
-    let lines: Vec<String> = pane
-        .lines()
-        .map(|line| line.trim_end().to_string())
-        .collect();
+    // Collect &str refs — no per-line String allocation needed.
+    let lines: Vec<&str> = pane.lines().collect();
 
     for (index, line) in lines.iter().enumerate().rev() {
-        let Some(captures) = line.strip_prefix('❯') else {
+        let Some(captures) = line.trim_end().strip_prefix('❯') else {
             continue;
         };
-        if index + 6 < lines.len() {
+        if index + IDLE_PROMPT_MAX_LINES_FROM_BOTTOM < lines.len() {
             return None;
         }
         return Some(captures.trim().to_string());

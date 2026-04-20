@@ -198,57 +198,72 @@ const SLACK_FINAL_REPLY_TEXT_LIMIT: usize = 2_500;
 
 fn split_for_slack_final_reply(text: &str) -> Vec<String> {
     let mut chunks = Vec::new();
-    let mut remaining = text.trim().to_string();
+    // Track as &str cursor to avoid allocating on every iteration.
+    let mut remaining = text.trim();
 
     while remaining.chars().count() > SLACK_FINAL_REPLY_TEXT_LIMIT {
-        let slice: String = remaining
-            .chars()
-            .take(SLACK_FINAL_REPLY_TEXT_LIMIT)
-            .collect();
+        // Find the byte offset of the SLACK_FINAL_REPLY_TEXT_LIMIT-th char without
+        // collecting into a String.
+        let byte_limit = remaining
+            .char_indices()
+            .nth(SLACK_FINAL_REPLY_TEXT_LIMIT)
+            .map(|(i, _)| i)
+            .unwrap_or(remaining.len());
+        let slice = &remaining[..byte_limit];
+
         let split_at = slice
             .rfind("\n\n")
-            .map(|index| index + 2)
-            .or_else(|| slice.rfind('\n').map(|index| index + 1))
-            .or_else(|| slice.rfind(' ').map(|index| index + 1))
-            .unwrap_or(slice.len());
-        let chunk_end = if split_at > 0 { split_at } else { slice.len() };
-        let chunk = remaining[..chunk_end].trim().to_string();
+            .map(|i| i + 2)
+            .or_else(|| slice.rfind('\n').map(|i| i + 1))
+            .or_else(|| slice.rfind(' ').map(|i| i + 1))
+            .unwrap_or(byte_limit);
+
+        let chunk = remaining[..split_at].trim();
         if !chunk.is_empty() {
-            chunks.push(chunk);
+            chunks.push(chunk.to_string()); // single allocation per chunk
         }
-        remaining = remaining[chunk_end..].trim().to_string();
+        remaining = remaining[split_at..].trim();
     }
 
     if !remaining.is_empty() {
-        chunks.push(remaining);
+        chunks.push(remaining.to_string());
     }
 
     chunks
 }
 
+/// Strip inline markdown (`**bold**`, `` `code` ``, fenced blocks) in a single pass.
+fn strip_markdown_inline(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' if chars.peek() == Some(&'*') => {
+                chars.next(); // skip second *
+            }
+            '`' => {}
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn to_plain_fallback(text: &str) -> String {
+    // Longest prefix first so "### " is matched before "# ".
+    const HEADING_PREFIXES: &[&str] = &["### ", "## ", "# "];
+
     text.lines()
         .map(|line| {
             let trimmed = line.trim_start();
-            if let Some(rest) = trimmed.strip_prefix("# ") {
+            if let Some(rest) = HEADING_PREFIXES.iter().find_map(|p| trimmed.strip_prefix(p)) {
                 return rest.trim().to_string();
             }
-            if let Some(rest) = trimmed.strip_prefix("## ") {
-                return rest.trim().to_string();
-            }
-            if let Some(rest) = trimmed.strip_prefix("### ") {
-                return rest.trim().to_string();
-            }
-
-            line.replace("```", "")
-                .replace("**", "")
-                .replace('`', "")
-                .trim_end()
-                .to_string()
+            let mut s = strip_markdown_inline(line);
+            s.truncate(s.trim_end().len());
+            s
         })
         .collect::<Vec<_>>()
         .join("\n")
-        .replace("**", "")
         .trim()
         .to_string()
 }
