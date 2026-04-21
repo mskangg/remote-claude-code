@@ -853,30 +853,83 @@ pub fn build_shell_install_script(
     let hook_settings_target = asset_root.join("claude-stop-hooks.json");
     let hook_settings_path = hook_settings_target.display().to_string();
     let hook_script_path = hook_script_target.display().to_string();
-    format!(
-        "#!/usr/bin/env sh\nset -eu\nmkdir -p \"{}\" \"{}\"\ninstall -m 755 \"{}\" \"{}\"\ninstall -m 755 \"{}\" \"{}\"\ninstall -m 755 \"{}\" \"{}\"\ncat > \"{}\" <<'EOF'\n{{\n  \"hooks\": {{\n    \"Stop\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}}]}}],\n    \"StopFailure\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}}]}}],\n    \"Notification\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}}]}}],\n    \"PreToolUse\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}}]}}],\n    \"PostToolUse\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}}]}}]\n  }}\n}}\nEOF\ncat > \"{}\" <<'EOF'\n#!/usr/bin/env sh\nset -eu\ncd \"{}\"\nexport RCC_PROJECT_ROOT=\"{}\"\nexport RCC_ENV_FILE=\"{}/.env.local\"\nexport RCC_HOOK_SETTINGS_PATH=\"{}\"\nexport RCC_HOOK_SCRIPT_PATH=\"{}\"\nexec \"{}\" \"$@\"\nEOF\nchmod 755 \"{}\"\nif ! grep -Fq 'export PATH=\"$HOME/.local/bin:$PATH\"' \"{}\" 2>/dev/null; then\n  printf '\nexport PATH=\"$HOME/.local/bin:$PATH\"\n' >> \"{}\"\nfi\nprintf 'Installed rcc launcher to {}\\n'\nprintf 'Open a new shell or run: source {}\\n'\n",
-        install_path.parent().map(|path| path.display().to_string()).unwrap_or_else(|| ".".to_string()),
-        asset_root.join("hooks").display(),
-        source_binary_path.display(),
-        binary_target,
+    let bin_dir = install_path
+        .parent()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| ".".to_string());
+    let hooks_dir = asset_root.join("hooks").display().to_string();
+    let profile = profile_path.display().to_string();
+    let workspace = workspace_root.display().to_string();
+
+    let mut s = String::new();
+
+    s.push_str("#!/usr/bin/env sh\nset -eu\n");
+    s.push_str(&format!("mkdir -p \"{bin_dir}\" \"{hooks_dir}\"\n"));
+    s.push_str(&format!(
+        "install -m 755 \"{}\" \"{binary_target}\"\n",
+        source_binary_path.display()
+    ));
+    s.push_str(&format!(
+        "install -m 755 \"{}\" \"{}\"\n",
         workspace_root.join(".claude/hooks/claude-stop-hook.mjs").display(),
-        hook_script_target.display(),
+        hook_script_target.display()
+    ));
+    s.push_str(&format!(
+        "install -m 755 \"{}\" \"{}\"\n",
         workspace_root.join(".claude/hooks/hook-event-store.mjs").display(),
-        hook_store_target.display(),
-        hook_settings_target.display(),
-        launcher_path,
-        workspace_root.display(),
-        workspace_root.display(),
-        workspace_root.display(),
-        hook_settings_path,
-        hook_script_path,
-        binary_target,
-        launcher_path,
-        profile_path.display(),
-        profile_path.display(),
-        launcher_path,
-        profile_path.display(),
-    )
+        hook_store_target.display()
+    ));
+
+    // Claude Code hook settings
+    s.push_str(&format!("cat > \"{hook_settings_path}\" <<'EOF'\n"));
+    s.push_str("{\n");
+    s.push_str("  \"hooks\": {\n");
+    s.push_str("    \"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}]}],\n");
+    s.push_str("    \"StopFailure\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}]}],\n");
+    s.push_str("    \"Notification\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}]}],\n");
+    s.push_str("    \"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}]}],\n");
+    s.push_str("    \"PostToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"node \\\"$RCC_HOOK_SCRIPT_PATH\\\"\", \"timeout\": 10}]}]\n");
+    s.push_str("  }\n}\nEOF\n");
+
+    // Launcher script
+    s.push_str(&format!("cat > \"{launcher_path}\" <<'EOF'\n"));
+    s.push_str("#!/usr/bin/env sh\nset -eu\n");
+    s.push_str(&format!("cd \"{workspace}\"\n"));
+    s.push_str(&format!("export RCC_PROJECT_ROOT=\"{workspace}\"\n"));
+    s.push_str(&format!("export RCC_ENV_FILE=\"{workspace}/.env.local\"\n"));
+    s.push_str(&format!("export RCC_HOOK_SETTINGS_PATH=\"{hook_settings_path}\"\n"));
+    s.push_str(&format!("export RCC_HOOK_SCRIPT_PATH=\"{hook_script_path}\"\n"));
+    s.push_str(&format!("exec \"{binary_target}\" \"$@\"\n"));
+    s.push_str("EOF\n");
+    s.push_str(&format!("chmod 755 \"{launcher_path}\"\n"));
+
+    // PATH update
+    s.push_str(&format!(
+        "if ! grep -Fq 'export PATH=\"$HOME/.local/bin:$PATH\"' \"{profile}\" 2>/dev/null; then\n  printf '\\nexport PATH=\"$HOME/.local/bin:$PATH\"\\n' >> \"{profile}\"\nfi\n"
+    ));
+
+    // Codex hooks (~/.codex/hooks.json) — installed only if codex is present and file absent
+    s.push_str("if command -v codex > /dev/null 2>&1 && [ ! -f \"$HOME/.codex/hooks.json\" ]; then\n");
+    s.push_str("  mkdir -p \"$HOME/.codex\"\n");
+    s.push_str("  cat > \"$HOME/.codex/hooks.json\" <<'CODEX_HOOKS_EOF'\n");
+    s.push_str(&build_codex_hook_config(&hook_script_path));
+    s.push_str("CODEX_HOOKS_EOF\n");
+    s.push_str("  printf 'Installed Codex hooks (/cx)\\n'\n");
+    s.push_str("fi\n");
+
+    // Gemini hooks (~/.gemini/settings.json) — installed only if gemini is present and file absent
+    s.push_str("if command -v gemini > /dev/null 2>&1 && [ ! -f \"$HOME/.gemini/settings.json\" ]; then\n");
+    s.push_str("  mkdir -p \"$HOME/.gemini\"\n");
+    s.push_str("  cat > \"$HOME/.gemini/settings.json\" <<'GEMINI_HOOKS_EOF'\n");
+    s.push_str(&build_gemini_hook_config(&hook_script_path));
+    s.push_str("GEMINI_HOOKS_EOF\n");
+    s.push_str("  printf 'Installed Gemini hooks (/gm)\\n'\n");
+    s.push_str("fi\n");
+
+    s.push_str(&format!("printf 'Installed rcc launcher to {launcher_path}\\n'\n"));
+    s.push_str(&format!("printf 'Open a new shell or run: source {profile}\\n'\n"));
+
+    s
 }
 
 pub fn should_run_installer(answer: &str) -> bool {
