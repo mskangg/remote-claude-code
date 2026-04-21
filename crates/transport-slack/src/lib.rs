@@ -10,7 +10,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::Result;
 use async_trait::async_trait;
 use core_model::{
-    SessionId, SessionMsg, SessionState, TransportBinding, TransportStatusMessage, UserCommand,
+    AgentType, SessionId, SessionMsg, SessionState, TransportBinding, TransportStatusMessage, UserCommand,
 };
 use core_service::{
     RuntimeEngine, SessionHandle, SessionRegistry, SessionRepository, SessionRuntimeCleanup,
@@ -39,6 +39,8 @@ pub struct SlackThreadReply {
 pub struct SlackSessionStart {
     pub channel_id: String,
     pub thread_ts: String,
+    /// Shell command used to launch the agent in the tmux session.
+    pub launch_command: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,10 +77,6 @@ pub struct SlackPostedMessage {
     pub message_ts: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SlackFormattedMessage {
-    text: String,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlackThreadAction {
@@ -424,14 +422,6 @@ fn bold_to_slack_mrkdwn(text: &str) -> String {
     out
 }
 
-fn format_claude_text_for_slack(text: &str) -> Vec<SlackFormattedMessage> {
-    split_for_slack_final_reply(text)
-        .into_iter()
-        .map(|chunk| SlackFormattedMessage {
-            text: to_plain_fallback(&chunk),
-        })
-        .collect()
-}
 
 pub fn build_status_update_request(
     posted: &SlackPostedMessage,
@@ -593,8 +583,8 @@ impl<T> SlackSessionOrchestrator for Arc<T>
 where
     T: SlackSessionOrchestrator + Send + Sync,
 {
-    async fn start_new_session(&self, channel_id: &str) -> Result<StartedSlackSession> {
-        (**self).start_new_session(channel_id).await
+    async fn start_new_session(&self, channel_id: &str, launch_command: String) -> Result<StartedSlackSession> {
+        (**self).start_new_session(channel_id, launch_command).await
     }
 
     async fn handle_session_reply(&self, reply: SlackThreadReply) -> Result<SessionState> {
@@ -644,7 +634,7 @@ pub trait SlackSessionStarter: Send + Sync {
 
 #[async_trait]
 pub trait SlackSessionOrchestrator: Send + Sync {
-    async fn start_new_session(&self, channel_id: &str) -> Result<StartedSlackSession>;
+    async fn start_new_session(&self, channel_id: &str, launch_command: String) -> Result<StartedSlackSession>;
     async fn handle_session_reply(&self, reply: SlackThreadReply) -> Result<SessionState>;
     async fn list_channel_sessions(&self, channel_id: &str) -> Result<Vec<SlackListedSession>>;
     async fn post_session_list(&self, channel_id: &str, thread_ts: &str) -> Result<()>;
@@ -926,7 +916,7 @@ where
             .register_project_root(session_id, project_root)
             .await?;
         let handle = self.resolver.resolve(session_id).await?;
-        let state = handle.send(SessionMsg::Recover).await?;
+        let state = handle.send(SessionMsg::Recover { launch_command: start.launch_command }).await?;
 
         Ok(StartedSlackSession {
             session_id,
@@ -1106,6 +1096,10 @@ pub struct SlackSocketModeConfig {
     pub bot_token: String,
     pub app_token: String,
     pub allowed_user_ids: Vec<String>,
+    /// Path to the hook settings JSON file (used to build non-Claude agent launch commands).
+    pub hook_settings_path: String,
+    /// Full launch command for Claude Code — honours `RCC_CLAUDE_COMMAND` if set.
+    pub claude_launch_command: String,
 }
 
 impl SlackSocketModeConfig {
@@ -1116,10 +1110,17 @@ impl SlackSocketModeConfig {
         if allowed_user_ids.is_empty() {
             anyhow::bail!("SLACK_ALLOWED_USER_ID is not set or empty — set at least one allowed Slack user ID");
         }
+        let hook_settings_path = std::env::var("RCC_HOOK_SETTINGS_PATH")
+            .unwrap_or_else(|_| ".claude/claude-stop-hooks.json".to_string());
+        let claude_launch_command = std::env::var("RCC_CLAUDE_COMMAND").unwrap_or_else(|_| {
+            format!("claude --settings {hook_settings_path} --dangerously-skip-permissions")
+        });
         Ok(Self {
             bot_token: std::env::var("SLACK_BOT_TOKEN")?,
             app_token: std::env::var("SLACK_APP_TOKEN")?,
             allowed_user_ids,
+            hook_settings_path,
+            claude_launch_command,
         })
     }
 }
@@ -1659,7 +1660,7 @@ pub async fn serve_socket_mode(
         while let Some(message) = stream.next().await {
             match message {
                 Ok(Message::Text(body)) => {
-                    match handle_socket_mode_text(Arc::clone(&orchestrator), &config.allowed_user_ids, body.as_ref()).await {
+                    match handle_socket_mode_text(Arc::clone(&orchestrator), &config, body.as_ref()).await {
                         Ok(Some(reply)) => {
                             if let Err(error) = stream.send(Message::Text(reply.into())).await {
                                 tracing::warn!(error = %error, "failed to send ack; reconnecting");
@@ -1700,9 +1701,11 @@ pub async fn serve_socket_mode(
 
 async fn handle_socket_mode_text(
     orchestrator: Arc<dyn SlackSessionOrchestrator>,
-    allowed_user_ids: &[String],
+    config: &SlackSocketModeConfig,
     raw: &str,
 ) -> Result<Option<String>> {
+    let allowed_user_ids = &config.allowed_user_ids;
+    let hook_settings_path = &config.hook_settings_path;
     match parse_socket_mode_request(raw) {
         Ok(SocketModeRequest::Hello {
             app_id,
@@ -1736,23 +1739,34 @@ async fn handle_socket_mode_text(
             }
 
             let command_text = payload.text.as_deref().map(str::trim).unwrap_or("");
-            let ack_payload = if command_text.is_empty() {
+            let agent_type = AgentType::from_slash_command(&payload.command);
+            let launch_command = match agent_type {
+                AgentType::ClaudeCode => config.claude_launch_command.clone(),
+                _ => agent_type.launch_command(hook_settings_path),
+            };
+
+            // /cc with no argument → show menu (the menu button starts Claude Code).
+            // /cx or /gm with no argument → start immediately (no agent-generic menu yet).
+            let should_start = command_requests_new_session(payload.text.as_deref())
+                || (command_text.is_empty() && agent_type != AgentType::ClaudeCode);
+
+            let ack_payload = if command_text.is_empty() && agent_type == AgentType::ClaudeCode {
                 build_main_menu_response()
-            } else if !command_requests_new_session(payload.text.as_deref()) {
+            } else if !should_start {
                 json!({
-                    "text": "Unsupported command. Use `/cc` or `/cc start`."
+                    "text": "Unsupported command. Use `/cc start`, `/cx start`, or `/gm start`."
                 })
             } else {
                 let channel_id = payload.channel_id.clone();
                 let orchestrator = Arc::clone(&orchestrator);
                 tokio::spawn(async move {
-                    if let Err(error) = orchestrator.start_new_session(&channel_id).await {
+                    if let Err(error) = orchestrator.start_new_session(&channel_id, launch_command).await {
                         tracing::error!(channel_id, error = %error, "failed to start Slack session");
                     }
                 });
 
                 json!({
-                    "text": "Starting a new Remote Claude Code session. Watch this channel for the new thread."
+                    "text": format!("Starting a new {} session. Watch this channel for the new thread.", agent_type.display_name())
                 })
             };
 
@@ -1799,8 +1813,10 @@ async fn handle_socket_mode_text(
                     "claude_session_new" => {
                         let channel_id = action.channel_id;
                         let orchestrator = Arc::clone(&orchestrator);
+                        // Interactive button always starts Claude Code. Honour RCC_CLAUDE_COMMAND.
+                        let launch_command = config.claude_launch_command.clone();
                         tokio::spawn(async move {
-                            if let Err(error) = orchestrator.start_new_session(&channel_id).await {
+                            if let Err(error) = orchestrator.start_new_session(&channel_id, launch_command).await {
                                 tracing::error!(
                                     channel_id,
                                     error = %error,
@@ -1995,6 +2011,16 @@ mod tests {
 
     use super::*;
 
+    fn test_slack_config(allowed_user_ids: &[String]) -> SlackSocketModeConfig {
+        SlackSocketModeConfig {
+            bot_token: "xoxb-test".to_string(),
+            app_token: "xapp-test".to_string(),
+            allowed_user_ids: allowed_user_ids.to_vec(),
+            hook_settings_path: String::new(),
+            claude_launch_command: "claude --dangerously-skip-permissions".to_string(),
+        }
+    }
+
     #[derive(Clone, Default)]
     struct RecordingResolver {
         calls: Arc<Mutex<Vec<SessionId>>>,
@@ -2045,7 +2071,7 @@ mod tests {
 
     #[async_trait]
     impl SlackSessionOrchestrator for RecordingOrchestrator {
-        async fn start_new_session(&self, channel_id: &str) -> Result<StartedSlackSession> {
+        async fn start_new_session(&self, channel_id: &str, _launch_command: String) -> Result<StartedSlackSession> {
             self.started_channels
                 .lock()
                 .await
@@ -2382,7 +2408,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &["U123".to_string()],
+            &test_slack_config(&["U123".to_string()]),
             r#"{
               "envelope_id":"env-2",
               "type":"interactive",
@@ -2415,7 +2441,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &["U123".to_string()],
+            &test_slack_config(&["U123".to_string()]),
             r#"{
               "envelope_id":"env-3",
               "type":"interactive",
@@ -2450,7 +2476,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &["U123".to_string()],
+            &test_slack_config(&["U123".to_string()]),
             r#"{
               "envelope_id":"env-4",
               "type":"interactive",
@@ -2485,7 +2511,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &[],
+            &test_slack_config(&[]),
             r#"{
               "envelope_id":"env-5",
               "type":"interactive",
@@ -2772,6 +2798,7 @@ mod tests {
             .start_session(SlackSessionStart {
                 channel_id: "C777".to_string(),
                 thread_ts: "3000.100".to_string(),
+                launch_command: "claude".to_string(),
             }, "/tmp/project")
             .await
             .expect("start session");
@@ -2812,6 +2839,7 @@ mod tests {
                 SlackSessionStart {
                     channel_id: "C777".to_string(),
                     thread_ts: "3000.100".to_string(),
+                    launch_command: "claude".to_string(),
                 },
                 "/tmp/project",
                 &publisher,
@@ -3008,39 +3036,6 @@ mod tests {
     }
 
     #[test]
-    fn format_claude_text_for_slack_normalizes_markdown_for_readability() {
-        let messages = format_claude_text_for_slack(
-            "# 요약\n\n**중요**\n\n| 항목 | 상태 |\n| --- | --- |\n| 테스트 | 통과 |\n",
-        );
-
-        assert_eq!(messages.len(), 1);
-        assert!(messages[0].text.contains("요약"));
-        assert!(messages[0].text.contains("중요"));
-        assert!(!messages[0].text.contains("**중요**"));
-        assert!(messages[0].text.contains("| 항목 | 상태 |"));
-    }
-
-    #[test]
-    fn format_claude_text_for_slack_splits_long_messages() {
-        let source = format!("{}\n\n{}", "a".repeat(2_500), "b".repeat(200));
-        let messages = format_claude_text_for_slack(&source);
-
-        assert_eq!(messages.len(), 2);
-        assert!(messages[0].text.chars().count() <= 2_500);
-        assert_eq!(messages[1].text, "b".repeat(200));
-    }
-
-    #[test]
-    fn format_claude_text_for_slack_strips_code_fences_for_plain_delivery() {
-        let messages = format_claude_text_for_slack("**중요**\n\n```\n**코드**\n```");
-
-        assert_eq!(messages.len(), 1);
-        assert!(messages[0].text.contains("중요"));
-        assert!(messages[0].text.contains("코드"));
-        assert!(!messages[0].text.contains("```"));
-    }
-
-    #[test]
     fn build_thread_message_request_with_blocks_supports_markdown_blocks() {
         let target = SlackMessageTarget {
             channel_id: "C777".to_string(),
@@ -3195,7 +3190,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &allowed,
+            &test_slack_config(&allowed),
             r#"{
               "envelope_id":"env-1",
               "type":"slash_commands",
@@ -3236,7 +3231,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &allowed,
+            &test_slack_config(&allowed),
             r#"{
               "envelope_id":"env-2",
               "type":"interactive",
@@ -3278,7 +3273,7 @@ mod tests {
         // When
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &allowed,
+            &test_slack_config(&allowed),
             r#"{
               "envelope_id":"env-allowed-1",
               "type":"slash_commands",
@@ -3323,7 +3318,7 @@ mod tests {
         // When - 두 번째 허용 사용자
         handle_socket_mode_text(
             orchestrator.clone(),
-            &allowed,
+            &test_slack_config(&allowed),
             r#"{
               "envelope_id":"env-multi-1",
               "type":"slash_commands",
@@ -3343,7 +3338,7 @@ mod tests {
         // When - 세 번째 허용 사용자
         handle_socket_mode_text(
             orchestrator.clone(),
-            &allowed,
+            &test_slack_config(&allowed),
             r#"{
               "envelope_id":"env-multi-2",
               "type":"slash_commands",
@@ -3381,7 +3376,7 @@ mod tests {
         // When
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &allowed,
+            &test_slack_config(&allowed),
             r#"{
               "envelope_id":"env-allowed-2",
               "type":"interactive",

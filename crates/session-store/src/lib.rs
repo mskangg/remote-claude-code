@@ -70,6 +70,11 @@ impl SqliteSessionRepository {
             );
             ",
         )?;
+        // Migration: add launch_command column if it doesn't exist yet.
+        let _ = connection.execute(
+            "ALTER TABLE sessions ADD COLUMN launch_command TEXT NOT NULL DEFAULT ''",
+            [],
+        );
 
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -78,6 +83,33 @@ impl SqliteSessionRepository {
 
     fn connection_arc(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.connection)
+    }
+
+    pub fn save_launch_command(&self, session_id: SessionId, launch_command: &str) -> anyhow::Result<()> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| anyhow::anyhow!("sqlite connection lock poisoned"))?;
+        connection.execute(
+            "UPDATE sessions SET launch_command = ?1 WHERE session_id = ?2",
+            params![launch_command, session_id.0.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_launch_command(&self, session_id: SessionId) -> anyhow::Result<Option<String>> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| anyhow::anyhow!("sqlite connection lock poisoned"))?;
+        let result = connection
+            .query_row(
+                "SELECT launch_command FROM sessions WHERE session_id = ?1",
+                params![session_id.0.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(result.filter(|s| !s.is_empty()))
     }
 
     pub fn save_transport_binding(

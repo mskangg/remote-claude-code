@@ -1042,7 +1042,9 @@ pub async fn execute_setup(
 
     let checks = run_doctor(config, workspace_root);
     print_doctor_summary(prompter, &checks);
-    if checks.iter().all(|check| check.ok) {
+    // codex/gemini checks are optional — only required checks must pass for setup to complete.
+    const OPTIONAL_CHECKS: &[&str] = &["codex", "gemini"];
+    if checks.iter().filter(|c| !OPTIONAL_CHECKS.contains(&c.name)).all(|check| check.ok) {
         let install_path = default_install_path()?;
         let profile_path = default_shell_profile_path()?;
         let installer_script_path = pending_install_script_path(workspace_root);

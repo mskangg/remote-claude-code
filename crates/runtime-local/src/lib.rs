@@ -39,8 +39,12 @@ pub struct HookRelayEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HookRelayEventKind {
+    /// Claude Code: "Stop" | Codex: "stop" | Gemini: "AfterAgent"
+    #[serde(alias = "stop", alias = "AfterAgent")]
     Stop,
+    /// Claude Code: "StopFailure"
     StopFailure,
+    /// Claude Code: "Notification"
     Notification,
     PreToolUse,
     PostToolUse,
@@ -816,7 +820,7 @@ where
         }
 
         match message {
-            SessionMsg::Recover => {
+            SessionMsg::Recover { launch_command } => {
                 self.start_hook_poller(session_id).await;
                 if !self.tmux.has_session(&target).await? {
                     let working_directory = self
@@ -870,7 +874,7 @@ where
                         .await?;
                     self.tmux.exec(&["send-keys", "-t", &target, "Enter"]).await?;
                     self.tmux
-                        .exec(&["send-keys", "-t", &target, "-l", "--", &self.config.launch_command])
+                        .exec(&["send-keys", "-t", &target, "-l", "--", &launch_command])
                         .await?;
                     self.tmux.exec(&["send-keys", "-t", &target, "Enter"]).await?;
                 }
@@ -1179,7 +1183,7 @@ mod tests {
         let session_id = SessionId::new();
 
         runtime
-            .handle(session_id, &SessionMsg::Recover, &SessionState::Idle)
+            .handle(session_id, &SessionMsg::Recover { launch_command: "claude --dangerously-skip-permissions".to_string() }, &SessionState::Idle)
             .await
             .expect("handle recover");
 
@@ -1245,7 +1249,7 @@ mod tests {
         let runtime = test_runtime(tmux.clone());
 
         runtime
-            .handle(SessionId::new(), &SessionMsg::Recover, &SessionState::Idle)
+            .handle(SessionId::new(), &SessionMsg::Recover { launch_command: "claude".to_string() }, &SessionState::Idle)
             .await
             .expect("handle recover");
 

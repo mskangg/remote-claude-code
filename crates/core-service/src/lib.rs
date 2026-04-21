@@ -388,7 +388,7 @@ fn reconcile_runtime_failure(
     error: anyhow::Error,
 ) -> SessionState {
     match message {
-        SessionMsg::UserCommand(_) | SessionMsg::Recover => SessionState::Failed {
+        SessionMsg::UserCommand(_) | SessionMsg::Recover { .. } => SessionState::Failed {
             reason: error.to_string(),
         },
         SessionMsg::Interrupt
@@ -428,7 +428,7 @@ fn should_forward_to_runtime(
             current_state,
             SessionState::Starting | SessionState::Completed
         ),
-        SessionMsg::Recover => matches!(current_state, SessionState::Starting),
+        SessionMsg::Recover { .. } => matches!(current_state, SessionState::Starting),
         SessionMsg::RuntimeProgress { .. }
         | SessionMsg::RuntimeCompleted { .. }
         | SessionMsg::RuntimeFailed { .. } => false,
@@ -437,7 +437,7 @@ fn should_forward_to_runtime(
 
 pub fn reduce(current_state: SessionState, message: &SessionMsg) -> SessionState {
     match (current_state, message) {
-        (SessionState::Starting, SessionMsg::Recover) => SessionState::Idle,
+        (SessionState::Starting, SessionMsg::Recover { .. }) => SessionState::Idle,
         (
             SessionState::Starting | SessionState::Idle | SessionState::Running { .. },
             SessionMsg::UserCommand(_),
@@ -813,8 +813,9 @@ mod tests {
         let actor = SessionActor::new(Arc::clone(&repository), Arc::clone(&runtime), Arc::new(OnceLock::new()));
         let session_id = SessionId::new();
 
+        let recover_msg = SessionMsg::Recover { launch_command: "claude".to_string() };
         let result = actor
-            .handle_message(session_id, SessionMsg::Recover)
+            .handle_message(session_id, recover_msg.clone())
             .await;
 
         assert!(matches!(result, Ok(SessionState::Failed { .. })));
@@ -827,7 +828,7 @@ mod tests {
         );
         let calls = runtime.calls.lock().await.clone();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, SessionMsg::Recover);
+        assert_eq!(calls[0].0, recover_msg);
         assert_eq!(calls[0].1, SessionState::Idle);
     }
 

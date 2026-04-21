@@ -9,8 +9,51 @@ use runtime_local::{LocalRuntime, LocalRuntimeConfig, SystemTmuxClient};
 use serde::{Deserialize, Serialize};
 use session_store::SqliteSessionRepository;
 use transport_slack::{
-    parse_allowed_user_ids, SlackProject, SlackProjectLocator, SlackSocketModeConfig, SlackTransport, SlackWebApiPublisher,
+    parse_allowed_user_ids, SlackListedSession, SlackProject, SlackProjectLocator,
+    SlackSessionOrchestrator, SlackSocketModeConfig, SlackThreadAction, SlackThreadReply,
+    SlackTransport, SlackWebApiPublisher, StartedSlackSession,
 };
+
+/// Wraps the application-level orchestrator to persist each session's `launch_command`
+/// to the database so it can be recovered correctly after an app restart.
+pub struct PersistingOrchestrator {
+    pub inner: AppSlackSessionCoordinator,
+    pub repository: Arc<SqliteSessionRepository>,
+}
+
+#[async_trait]
+impl SlackSessionOrchestrator for PersistingOrchestrator {
+    async fn start_new_session(
+        &self,
+        channel_id: &str,
+        launch_command: String,
+    ) -> anyhow::Result<StartedSlackSession> {
+        let started = self.inner.start_new_session(channel_id, launch_command.clone()).await?;
+        let _ = self.repository.save_launch_command(started.session_id, &launch_command);
+        Ok(started)
+    }
+
+    async fn handle_session_reply(&self, reply: SlackThreadReply) -> anyhow::Result<SessionState> {
+        self.inner.handle_session_reply(reply).await
+    }
+
+    async fn list_channel_sessions(&self, channel_id: &str) -> anyhow::Result<Vec<SlackListedSession>> {
+        self.inner.list_channel_sessions(channel_id).await
+    }
+
+    async fn post_session_list(&self, channel_id: &str, thread_ts: &str) -> anyhow::Result<()> {
+        self.inner.post_session_list(channel_id, thread_ts).await
+    }
+
+    async fn handle_thread_action(
+        &self,
+        channel_id: &str,
+        thread_ts: &str,
+        action: SlackThreadAction,
+    ) -> anyhow::Result<Option<SessionState>> {
+        self.inner.handle_thread_action(channel_id, thread_ts, action).await
+    }
+}
 
 pub struct AppConfig {
     pub state_db_path: PathBuf,
@@ -117,6 +160,8 @@ pub struct AppContext {
     pub repository: Arc<SqliteSessionRepository>,
     pub channel_project_store: Arc<JsonChannelProjectStore>,
     pub session_registry: Arc<SessionRegistry<SqliteSessionRepository, LocalRuntime<SystemTmuxClient>>>,
+    /// Default launch command used when recovering sessions without a stored agent type.
+    pub default_launch_command: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +196,7 @@ pub fn build_app(config: AppConfig) -> anyhow::Result<AppContext> {
         SystemTmuxClient,
         LocalRuntimeConfig {
             working_directory: config.runtime_working_directory,
-            launch_command: config.runtime_launch_command,
+            launch_command: config.runtime_launch_command.clone(),
             hook_events_directory: config.runtime_hook_events_directory,
         },
     ));
@@ -164,6 +209,7 @@ pub fn build_app(config: AppConfig) -> anyhow::Result<AppContext> {
         repository,
         channel_project_store,
         session_registry,
+        default_launch_command: config.runtime_launch_command,
     })
 }
 
@@ -192,10 +238,16 @@ impl AppContext {
             match state {
                 SessionState::Running { active_turn }
                 | SessionState::Cancelling { active_turn } => {
+                    let launch_command = self
+                        .repository
+                        .load_launch_command(session_id)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| self.default_launch_command.clone());
                     if let Err(error) = self
                         .session_registry
                         .runtime()
-                        .handle(session_id, &core_model::SessionMsg::Recover, &SessionState::Idle)
+                        .handle(session_id, &core_model::SessionMsg::Recover { launch_command }, &SessionState::Idle)
                         .await
                     {
                         mark_recovery_failure(&self.repository, session_id, &error).await?;
@@ -235,22 +287,25 @@ impl AppContext {
     }
 
     pub fn slack_socket_mode_config(&self) -> anyhow::Result<SlackSocketModeConfig> {
-        SlackSocketModeConfig::from_env()
+        let mut config = SlackSocketModeConfig::from_env()?;
+        // Override with the workspace-resolved launch command from AppConfig so we
+        // always use the absolute hook settings path, not a re-derived relative one.
+        config.claude_launch_command = self.default_launch_command.clone();
+        Ok(config)
     }
 
     pub fn slack_session_coordinator(
         &self,
         config: &SlackSocketModeConfig,
-    ) -> anyhow::Result<AppSlackSessionCoordinator> {
+    ) -> anyhow::Result<PersistingOrchestrator> {
         let transport = Arc::new(self.slack_transport());
         let project_locator = Arc::clone(&self.channel_project_store);
         let publisher = Arc::new(SlackWebApiPublisher::new(config.bot_token.clone())?);
 
-        Ok(SlackApplicationService::new(
-            transport,
-            project_locator,
-            publisher,
-        ))
+        Ok(PersistingOrchestrator {
+            inner: SlackApplicationService::new(transport, project_locator, publisher),
+            repository: Arc::clone(&self.repository),
+        })
     }
 
     pub fn configure_slack_lifecycle_observer(
@@ -347,6 +402,24 @@ pub fn run_doctor(config: &AppConfig, workspace_root: &Path) -> Vec<DoctorCheck>
             name: "channel_project_mapping",
             ok: config.channel_project_store_path.exists(),
             detail: loc.doctor_channel_mapping(&config.channel_project_store_path.display().to_string()),
+        },
+        DoctorCheck {
+            name: "codex",
+            ok: std::process::Command::new("codex")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false),
+            detail: "codex CLI 설치 여부 (/cx 사용 시 필요)".to_string(),
+        },
+        DoctorCheck {
+            name: "gemini",
+            ok: std::process::Command::new("gemini")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false),
+            detail: "gemini CLI 설치 여부 (/gm 사용 시 필요)".to_string(),
         },
     ]
 }
@@ -1904,6 +1977,7 @@ mod tests {
             .start_session(SlackSessionStart {
                 channel_id: "C321".to_string(),
                 thread_ts: "4000.100".to_string(),
+                launch_command: "claude".to_string(),
             }, "/tmp/project")
             .await
             .expect("start session");
@@ -2016,12 +2090,18 @@ mod tests {
             .slack_socket_mode_config()
             .expect("read slack socket mode config");
 
+        let hook_path = std::env::var("RCC_HOOK_SETTINGS_PATH")
+            .unwrap_or_else(|_| ".claude/claude-stop-hooks.json".to_string());
         assert_eq!(
             config,
             SlackSocketModeConfig {
                 bot_token: "xoxb-test".to_string(),
                 app_token: "xapp-test".to_string(),
                 allowed_user_ids: vec!["U123".to_string(), "U456".to_string()],
+                hook_settings_path: hook_path.clone(),
+                // claude_launch_command is overridden with AppContext::default_launch_command
+                // (which is AppConfig::runtime_launch_command).
+                claude_launch_command: "claude --dangerously-skip-permissions".to_string(),
             }
         );
         // EnvGuards drop here, restoring SLACK_BOT_TOKEN and SLACK_APP_TOKEN.

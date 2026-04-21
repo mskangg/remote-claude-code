@@ -16,8 +16,20 @@
     "slash_commands": [
       {
         "command": "/cc",
-        "description": "Open or control a Remote Claude Code session",
-        "usage_hint": "[command]",
+        "description": "Open or control a Claude Code session",
+        "usage_hint": "[start]",
+        "should_escape": false
+      },
+      {
+        "command": "/cx",
+        "description": "Open or control a Codex session",
+        "usage_hint": "[start]",
+        "should_escape": false
+      },
+      {
+        "command": "/gm",
+        "description": "Open or control a Gemini CLI session",
+        "usage_hint": "[start]",
         "should_escape": false
       }
     ]

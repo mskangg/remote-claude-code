@@ -74,6 +74,47 @@ pub struct UserCommand {
     pub text: String,
 }
 
+/// The AI coding agent to use for a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentType {
+    #[default]
+    ClaudeCode,
+    Codex,
+    Gemini,
+}
+
+impl AgentType {
+    /// Determine agent type from a Slack slash command (e.g. "/cc", "/cx", "/gm").
+    pub fn from_slash_command(cmd: &str) -> Self {
+        match cmd {
+            "/cx" => Self::Codex,
+            "/gm" => Self::Gemini,
+            _ => Self::ClaudeCode, // "/cc" and anything else → Claude Code
+        }
+    }
+
+    /// The shell command used to launch this agent in a tmux session.
+    pub fn launch_command(&self, hook_settings_path: &str) -> String {
+        match self {
+            Self::ClaudeCode => format!(
+                "claude --settings {hook_settings_path} --dangerously-skip-permissions"
+            ),
+            Self::Codex => "codex".to_string(),
+            Self::Gemini => "gemini".to_string(),
+        }
+    }
+
+    /// Human-readable name for UI display.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "Claude Code",
+            Self::Codex => "Codex",
+            Self::Gemini => "Gemini",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionMsg {
     UserCommand(UserCommand),
@@ -85,5 +126,6 @@ pub enum SessionMsg {
     RuntimeFailed { turn_id: TurnId, error: String },
     Interrupt,
     Terminate,
-    Recover,
+    /// Start or recover the session's tmux process with the given shell command.
+    Recover { launch_command: String },
 }

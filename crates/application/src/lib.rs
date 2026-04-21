@@ -159,6 +159,7 @@ where
     pub async fn start_new_session_internal(
         &self,
         channel_id: &str,
+        launch_command: String,
     ) -> Result<StartedSlackSession, ApplicationError>
     where
         S: transport_slack::SessionBindingRegistrar + transport_slack::SessionStatusRegistrar,
@@ -177,6 +178,7 @@ where
                 SlackSessionStart {
                     channel_id: post.channel_id,
                     thread_ts: post.message_ts,
+                    launch_command,
                 },
                 &project.project_root,
             )
@@ -326,8 +328,8 @@ where
     L: SlackProjectLocator + Send + Sync + 'static,
     P: SlackWorkingStatusPublisher + SlackSessionPublisher + Send + Sync + 'static,
 {
-    async fn start_new_session(&self, channel_id: &str) -> Result<StartedSlackSession> {
-        self.start_new_session_internal(channel_id)
+    async fn start_new_session(&self, channel_id: &str, launch_command: String) -> Result<StartedSlackSession> {
+        self.start_new_session_internal(channel_id, launch_command)
             .await
             .map_err(Into::into)
     }
@@ -865,7 +867,7 @@ mod tests {
         let service = SlackApplicationService::new(transport, locator, publisher.clone());
 
         let started = service
-            .start_new_session_internal("C777")
+            .start_new_session_internal("C777", "claude".to_string())
             .await
             .expect("start new session");
 
@@ -1496,7 +1498,7 @@ mod tests {
         let service = 바인딩_없는_서비스_셋업();
 
         // When
-        let result = service.start_new_session_internal("C_UNMAPPED").await;
+        let result = service.start_new_session_internal("C_UNMAPPED", "claude".to_string()).await;
 
         // Then
         assert!(

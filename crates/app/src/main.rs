@@ -27,8 +27,11 @@ async fn main() {
 
     match parse_cli_command(&args) {
         CliCommand::Doctor => {
+            const OPTIONAL_CHECKS: &[&str] = &["codex", "gemini"];
             let checks = run_doctor(&config, &workspace_root);
-            let all_ok = checks.iter().all(|check| check.ok);
+            let all_ok = checks.iter()
+                .filter(|c| !OPTIONAL_CHECKS.contains(&c.name))
+                .all(|check| check.ok);
 
             for check in checks {
                 let status = if check.ok { "OK" } else { "FAIL" };
