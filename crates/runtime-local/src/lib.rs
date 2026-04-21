@@ -874,7 +874,7 @@ where
                         .await?;
                     self.tmux.exec(&["send-keys", "-t", &target, "Enter"]).await?;
                     self.tmux
-                        .exec(&["send-keys", "-t", &target, "-l", "--", &launch_command])
+                        .exec(&["send-keys", "-t", &target, "-l", "--", launch_command])
                         .await?;
                     self.tmux.exec(&["send-keys", "-t", &target, "Enter"]).await?;
                 }
@@ -1793,9 +1793,11 @@ mod tests {
         let home_dir = temp_dir.path().join("home");
         let project_root = "/tmp/project";
         let claude_session_id = "claude-session-1";
-        let _hlock = home_env_lock();
+        let hlock = home_env_lock();
         let _home = EnvGuard::set("HOME", &home_dir);
         let transcript_path = build_project_session_log_path(project_root, claude_session_id).expect("transcript path");
+        // Drop mutex before first .await — HOME stays set via _home for the rest of the test.
+        drop(hlock);
         fs::create_dir_all(transcript_path.parent().expect("transcript parent"))
             .await
             .expect("create transcript parent");

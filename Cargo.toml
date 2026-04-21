@@ -16,12 +16,12 @@ edition = "2021"
 license = "MIT"
 version = "0.1.0"
 authors = ["mskangg"]
-repository = "https://github.com/mskangg/remote-claude-code"
-description = "Control your Claude Code sessions from Slack — anywhere, any device"
+repository = "https://github.com/mskangg/oh-my-remote-ai"
+description = "Control Claude Code, Codex, and Gemini from Slack — anywhere, any device"
 
 [workspace.lints.rust]
 future-incompatible = "warn"
-nonstandard_style = "deny"
+nonstandard_style = { level = "deny", priority = -1 }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -2098,7 +2098,7 @@ mod tests {
                 bot_token: "xoxb-test".to_string(),
                 app_token: "xapp-test".to_string(),
                 allowed_user_ids: vec!["U123".to_string(), "U456".to_string()],
-                hook_settings_path: hook_path.clone(),
+                hook_settings_path: hook_path,
                 // claude_launch_command is overridden with AppContext::default_launch_command
                 // (which is AppConfig::runtime_launch_command).
                 claude_launch_command: "claude --dangerously-skip-permissions".to_string(),
